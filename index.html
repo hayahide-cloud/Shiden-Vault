@@ -202,7 +202,7 @@
        iv:<b64>, ct:<b64>, updated:<ISO> }
    復号後（保管庫）:
      { v:1,
-       entries:[ { id, type:"login"|"token"|"note", name, ..., ct, mt } ],
+       entries:[ { id, type:"login"|"token"|"card"|"note", name, ..., ct, mt } ],
        apps:[ { id, name, url, storageKey, path } ],      // 紫電アプリ接続先
        hub:{ tokenId, owner, repo, branch } }              // アプリに配布する接続情報
 
@@ -243,6 +243,18 @@ const TYPES = {
       { key: "note",    label: "メモ", multi: true },
       { key: "tags",    label: "タグ（スペース区切り）", placeholder: "github 紫電" },
     ] },
+  card: { label: "クレジットカード", emoji: "💳",
+    fields: [
+      { key: "name",   label: "カード名", req: true, placeholder: "楽天カード" },
+      { key: "brand",  label: "ブランド", sel: [["", "未選択"], ["Visa", "Visa"], ["Mastercard", "Mastercard"], ["JCB", "JCB"], ["Amex", "American Express"], ["Diners", "Diners Club"], ["その他", "その他"]] },
+      { key: "holder", label: "名義（カード表記）", placeholder: "TARO YAMADA", copy: true },
+      { key: "number", label: "カード番号", req: true, secret: true, copy: true, card: true, hint: "数字のみ（スペース・ハイフンは保存時に除去）。一覧には末尾4桁だけ表示" },
+      { key: "expiry", label: "有効期限", kind: "month", hint: "期限の30日前から一覧で警告する" },
+      { key: "cvv",    label: "セキュリティコード", secret: true, copy: true },
+      { key: "pin",    label: "暗証番号（任意）", secret: true, copy: true },
+      { key: "note",   label: "メモ", multi: true, placeholder: "引き落とし口座・利用限度額・紛失時の連絡先など" },
+      { key: "tags",   label: "タグ（スペース区切り）", placeholder: "メイン 家計" },
+    ] },
   note: { label: "セキュアメモ", emoji: "📝",
     fields: [
       { key: "name", label: "タイトル", req: true, placeholder: "Wi-Fi パスワード" },
@@ -275,6 +287,13 @@ const b64ToBytes = b => Uint8Array.from(atob(b), c => c.charCodeAt(0));
 const b64url = s => b64enc(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 function hostOf(u) { try { return new URL(u).host; } catch (e) { return u || ""; } }
 function daysLeft(ymd) { if (!ymd) return null; return Math.ceil((new Date(ymd + "T23:59:59") - new Date()) / 86400000); }
+// カード有効期限（YYYY-MM）はその月の末日まで有効
+function monthEnd(ym) { if (!/^\d{4}-\d{2}$/.test(ym || "")) return null; const [y, m] = ym.split("-").map(Number); const d = new Date(y, m, 0); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+function cardDaysLeft(e) { return e.expiry ? daysLeft(monthEnd(e.expiry)) : null; }
+const cardDigits = v => String(v || "").replace(/\D/g, "");
+const cardFmt = v => cardDigits(v).replace(/(\d{4})(?=\d)/g, "$1 ");
+const cardLast4 = v => { const d = cardDigits(v); return d ? "•••• " + d.slice(-4) : ""; };
+const expiryMMYY = ym => /^\d{4}-\d{2}$/.test(ym || "") ? ym.slice(5, 7) + "/" + ym.slice(2, 4) : (ym || "");
 function prefs() { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch (e) { return {}; } }
 function setPref(k, v) { const p = prefs(); p[k] = v; localStorage.setItem(PREF_KEY, JSON.stringify(p)); }
 
@@ -431,12 +450,14 @@ function renderLocked() {
 }
 
 function alertsHtml(v) {
-  const soon = v.entries.filter(e => e.type === "token" && e.expires && daysLeft(e.expires) <= 14).sort((a, b) => daysLeft(a.expires) - daysLeft(b.expires));
+  const left = e => e.type === "token" ? daysLeft(e.expires) : cardDaysLeft(e);
+  const soon = v.entries.filter(e => (e.type === "token" && e.expires) || (e.type === "card" && e.expiry))
+    .filter(e => left(e) != null && left(e) <= (e.type === "card" ? 30 : 14)).sort((a, b) => left(a) - left(b));
   if (!soon.length) return "";
-  const expired = soon.filter(e => daysLeft(e.expires) < 0), near = soon.filter(e => daysLeft(e.expires) >= 0);
+  const expired = soon.filter(e => left(e) < 0), near = soon.filter(e => left(e) >= 0);
   let h = "";
-  if (expired.length) h += `<div class="alert bad">⛔ 期限切れのトークン: ${expired.map(e => esc(e.name)).join("、")}。再発行して各アプリへ配布し直してください。</div>`;
-  if (near.length) h += `<div class="alert">⚠️ まもなく期限切れ: ${near.map(e => `${esc(e.name)}（あと${daysLeft(e.expires)}日）`).join("、")}</div>`;
+  if (expired.length) h += `<div class="alert bad">⛔ 期限切れ: ${expired.map(e => esc(e.name)).join("、")}。トークンは再発行して各アプリへ配布し直し、カードは新しいカードの情報に更新してください。</div>`;
+  if (near.length) h += `<div class="alert">⚠️ まもなく期限切れ: ${near.map(e => `${esc(e.name)}（あと${left(e)}日）`).join("、")}</div>`;
   return h;
 }
 
@@ -444,9 +465,11 @@ function fieldHtml(f, val) {
   const v = val == null ? (f.def || "") : val;
   let input;
   if (f.multi) input = `<textarea class="fin" data-fld="${f.key}" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(v)}</textarea>`;
+  else if (f.sel) input = `<select class="fin" data-fld="${f.key}">${f.sel.map(([val, label]) => `<option value="${esc(val)}"${String(v) === val ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
   else {
-    const type = f.secret ? "password" : (f.kind === "date" ? "date" : (f.kind === "url" ? "url" : "text"));
-    input = `<input class="fin" data-fld="${f.key}" type="${type}" value="${esc(v)}" placeholder="${esc(f.placeholder || "")}" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">`;
+    const type = f.secret ? "password" : (f.kind === "date" ? "date" : (f.kind === "month" ? "month" : (f.kind === "url" ? "url" : "text")));
+    const im = f.card || f.key === "cvv" || f.key === "pin" ? ` inputmode="numeric"` : "";
+    input = `<input class="fin" data-fld="${f.key}" type="${type}" value="${esc(v)}" placeholder="${esc(f.placeholder || "")}"${im} autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">`;
     if (f.secret) input = `<div class="fwith">${input}<button class="cbtn ibtn" type="button" data-peek="${f.key}">表示</button>${f.gen ? `<button class="cbtn ibtn" type="button" data-gen="${f.key}">生成</button>` : ""}</div>`;
   }
   const gen = f.gen ? `<div class="gen"><span>長さ <b id="genlen-v">${ui.genLen}</b></span><input type="range" id="genlen" min="8" max="64" value="${ui.genLen}">
@@ -470,18 +493,24 @@ function entryForm(v) {
 
 function entryRow(e, v) {
   const T = TYPES[e.type] || TYPES.note;
-  const dl = e.type === "token" ? daysLeft(e.expires) : null;
-  const badge = dl == null ? "" : (dl < 0 ? `<span class="badge bad">期限切れ</span>` : (dl <= 14 ? `<span class="badge warn">あと${dl}日</span>` : ""));
+  const dl = e.type === "token" ? daysLeft(e.expires) : (e.type === "card" ? cardDaysLeft(e) : null);
+  const warnDays = e.type === "card" ? 30 : 14;
+  const badge = dl == null ? "" : (dl < 0 ? `<span class="badge bad">期限切れ</span>` : (dl <= warnDays ? `<span class="badge warn">あと${dl}日</span>` : ""));
   const sub = e.type === "login" ? [e.username, hostOf(e.url)].filter(Boolean).join(" / ")
             : e.type === "token" ? [e.service, e.scope, e.expires ? "期限 " + e.expires : ""].filter(Boolean).join(" / ")
+            : e.type === "card" ? [e.brand, cardLast4(e.number), e.expiry ? "期限 " + expiryMMYY(e.expiry) : ""].filter(Boolean).join(" / ")
             : (e.tags || "");
   const quick = e.type === "login" && e.password ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="password">PWコピー</button>`
-              : e.type === "token" && e.secret ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="secret">コピー</button>` : "";
+              : e.type === "token" && e.secret ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="secret">コピー</button>`
+              : e.type === "card" && e.number ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="number">番号コピー</button>` : "";
   const isOpen = ui.open === e.id;
   const detail = isOpen ? `<div class="detail">${T.fields.filter(f => f.key !== "name" && e[f.key]).map(f => {
       const shown = !f.secret || ui.show.has(e.id + ":" + f.key);
       let val = f.key === "tags" ? (e.tags || "").split(/\s+/).filter(Boolean).map(t => `<span class="badge tag">${esc(t)}</span>`).join("")
               : f.kind === "url" ? `<a href="${esc(e[f.key])}" target="_blank" rel="noopener noreferrer">${esc(e[f.key])}</a>`
+              : f.kind === "month" ? esc(expiryMMYY(e[f.key])) + `<span class="fhint" style="margin-left:6px">（${esc(e[f.key])}）</span>`
+              : f.card ? (shown ? esc(cardFmt(e[f.key])) : esc(cardLast4(e[f.key])))
+              : f.sel ? esc((f.sel.find(o => o[0] === e[f.key]) || [])[1] || e[f.key])
               : shown ? esc(e[f.key]).replace(/\n/g, "<br>") : "••••••••••••";
       return `<div class="drow"><span class="dlab">${f.label.replace(/（.*?）/, "")}</span><span class="dval${f.secret && shown ? " mono" : ""}${f.secret && !shown ? " masked" : ""}">${val}</span>
         ${f.secret ? `<button class="cbtn ibtn" data-peek-e="${e.id}" data-key="${f.key}">${shown ? "隠す" : "表示"}</button>` : ""}
@@ -500,14 +529,14 @@ function entryRow(e, v) {
 function entriesCard(v) {
   const q = ui.q.trim().toLowerCase();
   const list = v.entries.filter(e => ui.type === "all" || e.type === ui.type)
-    .filter(e => !q || [e.name, e.username, e.url, e.service, e.scope, e.tags, e.note].filter(Boolean).join(" ").toLowerCase().includes(q))
+    .filter(e => !q || [e.name, e.username, e.url, e.service, e.scope, e.brand, e.holder, e.tags, e.note].filter(Boolean).join(" ").toLowerCase().includes(q))
     .sort((a, b) => (a.name || "").localeCompare(b.name || "", "ja"));
   const chip = (t, label) => `<button class="chip${ui.type === t ? " sel" : ""}" data-filter="${t}">${label}</button>`;
   const formOpen = ui.form || ui.editId;
   return `<div class="card">
     <div class="chead"><span class="cemoji">🔐</span><span class="cname">保管庫</span><span class="csum"><b>${v.entries.length}</b>件</span></div>
-    <div class="toolbar"><input class="fin" id="q" type="search" placeholder="検索（名前・ユーザー名・URL・タグ）" value="${esc(ui.q)}" autocapitalize="off" autocomplete="off"><button class="cbtn rec" data-open="entry">${formOpen ? "閉じる" : "＋ 追加"}</button></div>
-    <div class="chips">${chip("all", "すべて")}${chip("login", "🔑 ログイン")}${chip("token", "🎫 トークン")}${chip("note", "📝 メモ")}</div>
+    <div class="toolbar"><input class="fin" id="q" type="search" placeholder="検索（名前・ユーザー名・URL・ブランド・タグ）" value="${esc(ui.q)}" autocapitalize="off" autocomplete="off"><button class="cbtn rec" data-open="entry">${formOpen ? "閉じる" : "＋ 追加"}</button></div>
+    <div class="chips">${chip("all", "すべて")}${chip("login", "🔑 ログイン")}${chip("token", "🎫 トークン")}${chip("card", "💳 カード")}${chip("note", "📝 メモ")}</div>
     ${formOpen ? entryForm(v) : ""}
     <div class="items">${list.length ? list.map(e => entryRow(e, v)).join("") : `<div class="iempty">${v.entries.length ? "該当する項目がありません" : "まだ登録がありません。「＋ 追加」からパスワードやトークンを保存できます"}</div>`}</div>
     ${PENDING.length ? `<div class="pending-note">未同期の変更が ${PENDING.length} 件あります（${cfgOk(getCfg()) ? "自動で同期されます" : "GitHub 設定後に同期されます"}）</div>` : ""}
@@ -632,7 +661,7 @@ app.addEventListener("click", async e => {
   if (d.peek) { const inp = app.querySelector(`[data-fld="${d.peek}"]`); inp.type = inp.type === "password" ? "text" : "password"; btn.textContent = inp.type === "password" ? "表示" : "隠す"; return; }
   if (d.gen) { const inp = app.querySelector(`[data-fld="${d.gen}"]`); inp.value = genPassword(ui.genLen, { digits: ui.genDig, symbols: ui.genSym }); inp.type = "text"; const pk = app.querySelector(`[data-peek="${d.gen}"]`); if (pk) pk.textContent = "隠す"; return; }
   if (d.peekE) { const k = d.peekE + ":" + d.key; ui.show.has(k) ? ui.show.delete(k) : ui.show.add(k); render(); return; }
-  if (d.copy) { const it = v.entries.find(x => x.id === d.copy); if (it && it[d.key]) copyText(it[d.key], TYPES[it.type].fields.find(f => f.key === d.key).label.replace(/（.*?）/, "")); return; }
+  if (d.copy) { const it = v.entries.find(x => x.id === d.copy); if (it && it[d.key]) { const f = TYPES[it.type].fields.find(x => x.key === d.key); copyText(f.card ? cardDigits(it[d.key]) : it[d.key], f.label.replace(/（.*?）/, "")); } return; }
 
   if (d.edit) { ui.editId = d.edit; ui.form = null; render(); app.querySelector(`.addform[data-form="entry"]`).scrollIntoView({ block: "nearest" }); return; }
   if (d.del) { const it = v.entries.find(x => x.id === d.del); if (!confirm(`「${it ? it.name : ""}」を削除しますか？`)) return; ui.open = null; await pushOp({ t: "del", id: d.del }); return; }
@@ -641,7 +670,8 @@ app.addEventListener("click", async e => {
     const item = { type };
     for (const f of T.fields) {
       const raw = form.querySelector(`[data-fld="${f.key}"]`).value;
-      const val = f.multi ? raw.replace(/\s+$/, "") : raw.trim();
+      let val = f.multi ? raw.replace(/\s+$/, "") : raw.trim();
+      if (f.card) { val = cardDigits(val); if (val && (val.length < 12 || val.length > 19)) { alert("カード番号は12〜19桁の数字で入力してください。"); return; } }
       if (f.req && !val) { alert(f.label.replace(/（.*?）/, "") + "は必須です。"); return; }
       item[f.key] = val;
     }

@@ -22,9 +22,9 @@ Shiden Vault（紫電パスワードマネージャー）の公開ホスティ�
 
 ## できること
 
-- ログイン（URL・ユーザー名・パスワード）／トークン・APIキー（サービス・権限・有効期限・管理ページ）／セキュアメモ の登録・検索・タグ
+- ログイン（URL・ユーザー名・パスワード）／トークン・APIキー（サービス・権限・有効期限・管理ページ）／クレジットカード（ブランド・名義・番号・有効期限・セキュリティコード・暗証番号。一覧は末尾4桁のみ表示）／セキュアメモ の登録・検索・タグ
 - パスワード生成（長さ・数字・記号）、コピー、表示/非表示
-- トークンの期限警告（14日前から。期限切れは赤）
+- トークンの期限警告（14日前から）・カードの有効期限警告（30日前から）。期限切れは赤
 - 他端末との同期（操作キュー方式・409 は最新を取り直して再適用）
 - マスターパスワード変更（全体を再暗号化。他端末は次回解錠時に新パスワード）
 
@@ -85,4 +85,4 @@ function adoptHubConnection() {
   "iv": "<base64>", "ct": "<base64>", "updated": "<ISO>" }
 ```
 
-復号後: `{ v, entries:[{ id, type:"login"|"token"|"note", name, …, ct, mt }], apps:[{ id, name, url, storageKey, path }], hub:{ tokenId, owner, repo, branch } }`
+復号後: `{ v, entries:[{ id, type:"login"|"token"|"card"|"note", name, …, ct, mt }], apps:[{ id, name, url, storageKey, path }], hub:{ tokenId, owner, repo, branch } }`
