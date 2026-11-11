@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Shiden Vault</title>
+<meta name="description" content="パスワード・トークンの暗号化保管庫（スマホ用・GitHub同期）">
+<meta name="referrer" content="no-referrer">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="紫電Vault">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#09060f">
+<style>
+  /* ================================================================
+     Shiden Vault — パスワード・トークンの暗号化保管庫
+     Shiden Assets の技術（単一HTML・GitHub Contents API同期・
+     localStorage設定・操作キュー・紫電ダークテーマ）を流用している。
+
+     秘密情報は一切含まない（このリポジトリは公開）。
+     実データは Private の Hayahide-Log の vault.json に保存されるが、
+     その中身は端末側でマスターパスワードから導出した鍵（PBKDF2 → AES-256-GCM）
+     で暗号化した暗号文のみ。GitHub にも、この公開ページにも平文は置かれない。
+     GitHub トークンは各端末のブラウザ内(localStorage)のみに保存される。
+     ================================================================ */
+  :root {
+    --page: #09060f; --surface: #14101d; --surface-2: #1d1729;
+    --ink: #ece5fa; --ink-2: #c4b7dc; --muted: #9b8db8;
+    --grid: #2a2140; --border: rgba(168,120,255,0.16);
+    --accent: #a06bff; --accent-hi: #c084fc; --accent-deep: #7c3aed;
+    --good: #34d399; --bad: #f87171; --warn: #fbbf24;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { color-scheme: dark; }
+  body {
+    background:
+      radial-gradient(920px 500px at 82% -12%, rgba(124,58,237,0.20), transparent 60%),
+      var(--page);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+    min-height: 100vh;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+
+  header { margin-bottom: 18px; }
+  header h1 { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 800; letter-spacing: .01em; }
+  .logo-badge { width: 32px; height: 32px; border-radius: 8px; flex: none; box-shadow: 0 4px 14px rgba(124,58,237,0.4); }
+  .brand-grad { background: linear-gradient(90deg, #c084fc, #a06bff 55%, #facc15); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .header-underline { height: 2px; margin-top: 12px; border-radius: 2px; background: linear-gradient(90deg, var(--accent-deep), var(--accent-hi) 50%, transparent); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+  .chead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .cemoji { font-size: 18px; }
+  .cname { font-size: 15px; font-weight: 800; flex: 1; }
+  .csum { font-size: 12px; color: var(--muted); text-align: right; }
+  .csum b { color: var(--ink); font-weight: 700; }
+
+  .sync-head { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+  .gh-status { font-size: 12px; color: var(--muted); align-self: stretch; }
+  .linkbtns { display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .linkbtn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 7px 13px; text-decoration: none; transition: color .15s, border-color .15s, background .15s; }
+  .linkbtn svg { width: 15px; height: 15px; flex: none; }
+  .linkbtn:hover, .linkbtn:active { color: var(--accent-hi); border-color: rgba(168,120,255,0.45); background: rgba(124,58,237,0.14); }
+  .linkbtn.danger { color: var(--muted); background: transparent; }
+  .linkbtn.danger:hover, .linkbtn.danger:active { color: var(--bad); border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.10); }
+  .btn { font-family: inherit; font-weight: 700; cursor: pointer; color: #fff; border: none; border-radius: 999px; padding: 10px 18px; font-size: 14px; background: linear-gradient(135deg, var(--accent-deep) 0%, #a855f7 60%, #b678fb 100%); box-shadow: 0 6px 20px rgba(124,58,237,0.3); }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  .sync-cfg { display: none; margin-top: 14px; }
+  .sync-cfg.open { display: block; }
+  .sync-cfg label, .hint { font-size: 12px; color: var(--ink-2); display: block; margin-bottom: 10px; line-height: 1.6; }
+  .cfg-grid { display: grid; gap: 8px; }
+  .fin, .sync-cfg input, textarea.fin, select.fin { width: 100%; font-family: inherit; font-size: 16px; background: var(--surface-2); color: var(--ink); border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px; }
+  .fin:focus, .sync-cfg input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(160,107,255,0.2); }
+  textarea.fin { min-height: 72px; resize: vertical; }
+  .cfg-actions, .form-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+
+  /* フォーム */
+  .frow { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+  .flabel { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .fhint { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .fwith { display: flex; gap: 6px; align-items: center; }
+  .fwith .fin { flex: 1; }
+  .cbtn { font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; white-space: nowrap; }
+  .cbtn:hover, .cbtn:active { color: var(--accent-hi); border-color: rgba(168,120,255,0.45); }
+  .cbtn.rec { color: #fff; background: linear-gradient(135deg, var(--accent-deep), #a855f7); border-color: transparent; }
+  .cbtn.undo { color: var(--muted); }
+  .cbtn.ibtn { font-size: 12px; padding: 6px 10px; }
+  .cbtn.danger { color: var(--bad); border-color: rgba(248,113,113,0.35); }
+  .addform { display: none; margin-top: 12px; border-top: 1px solid var(--grid); padding-top: 12px; }
+  .addform.open { display: block; }
+  .gen { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 12px; color: var(--ink-2); margin-top: 4px; }
+  .gen input[type=range] { width: 120px; accent-color: var(--accent); }
+  .gen label { display: inline-flex; align-items: center; gap: 4px; }
+
+  /* 検索・フィルタ */
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .toolbar .fin { flex: 1; font-size: 15px; padding: 9px 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chip { font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; color: var(--muted); background: transparent; border: 1px solid var(--grid); border-radius: 999px; padding: 5px 11px; }
+  .chip.sel { color: var(--accent-hi); border-color: rgba(168,120,255,0.5); background: rgba(124,58,237,0.14); }
+
+  /* 一覧 */
+  .items { display: flex; flex-direction: column; }
+  .irow { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--grid); cursor: pointer; }
+  .irow:first-child { border-top: none; }
+  .iico { width: 36px; height: 36px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: rgba(124,58,237,0.14); border: 1px solid var(--border); font-size: 17px; }
+  .iname { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 700; }
+  .iname .isub { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .iact { display: flex; gap: 6px; flex: none; }
+  .iempty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+  .detail { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 0 0 10px; }
+  .drow { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--grid); }
+  .drow:first-child { border-top: none; padding-top: 0; }
+  .dlab { font-size: 11px; color: var(--muted); width: 84px; flex: none; }
+  .dval { flex: 1; min-width: 0; font-size: 14px; word-break: break-all; font-variant-ligatures: none; }
+  .dval.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .dval.masked { letter-spacing: 2px; color: var(--ink-2); }
+  .dval a { color: var(--accent-hi); }
+  .badge { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; margin-left: 6px; vertical-align: middle; }
+  .badge.warn { color: #1a1300; background: var(--warn); }
+  .badge.bad { color: #fff; background: var(--bad); }
+  .badge.tag { color: var(--accent-hi); background: rgba(124,58,237,0.16); border: 1px solid var(--border); margin-left: 0; margin-right: 4px; }
+  .alert { border: 1px solid rgba(251,191,36,0.4); background: rgba(251,191,36,0.08); color: #fde68a; border-radius: 12px; padding: 10px 12px; font-size: 12.5px; margin-bottom: 12px; line-height: 1.6; }
+  .alert.bad { border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.08); color: #fecaca; }
+  .pending-note { font-size: 12px; color: var(--warn); margin-top: 8px; }
+
+  /* ロック画面 */
+  .lock { text-align: center; padding: 10px 0 4px; }
+  .lock .lk { font-size: 44px; margin-bottom: 6px; }
+  .lock h2 { font-size: 17px; font-weight: 800; margin-bottom: 6px; }
+  .lock p { font-size: 12.5px; color: var(--ink-2); line-height: 1.6; margin-bottom: 14px; }
+  .lock .cfg-grid { text-align: left; }
+  .strength { height: 5px; border-radius: 3px; background: var(--grid); overflow: hidden; margin: 2px 0 4px; }
+  .strength i { display: block; height: 100%; width: 0; background: var(--bad); transition: width .2s, background .2s; }
+
+  /* アプリ接続 */
+  .approw { display: flex; flex-direction: column; gap: 8px; padding: 11px 0; border-top: 1px solid var(--grid); }
+  .approw:first-child { border-top: none; }
+  .apphead { display: flex; align-items: center; gap: 10px; }
+  .appbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ok { color: var(--good); } .ng { color: var(--muted); }
+
+  /* トースト */
+  #toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); background: var(--surface-2); color: var(--ink); border: 1px solid rgba(168,120,255,0.45); border-radius: 999px; padding: 10px 18px; font-size: 13px; font-weight: 700; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; box-shadow: 0 10px 30px rgba(0,0,0,0.4); z-index: 10; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  footer { color: var(--muted); font-size: 11px; text-align: center; margin-top: 8px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><img class="logo-badge" src="icon.svg" alt="紫電" width="32" height="32"><span class="brand-grad">Shiden</span><span class="brand-grad">Shiden</span>&nbsp;Password Manager</h1>nbsp;Vault</h1>
+    <p class="sub">パスワード・トークンの暗号化保管庫 / M.T.Works</p>
+    <div class="header-underline"></div>
+  </header>
+
+  <!-- 同期 -->
+  <div class="card">
+    <div class="sync-head">
+      <span id="gh-status" class="gh-status"></span>
+      <span class="linkbtns">
+        <a class="linkbtn" href="https://hayahide-cloud.github.io/Shiden-Dashboard/" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 20v-6M13 20V9M18 20v-9"/></svg><span>ダッシュボード</span></a>
+        <button class="linkbtn" id="gh-sync" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2"/><path d="M21 4v5h-5M3 20v-5h5"/></svg><span>同期</span></button>
+        <button class="linkbtn" id="gh-config" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>設定</span></button>
+        <button class="linkbtn" id="gh-lock" type="button" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>ロック</span></button>
+      </span>
+    </div>
+    <div class="sync-cfg" id="gh-cfg-panel">
+      <label>GitHub Private リポジトリ（Hayahide-Log）の vault.json に暗号化した保管庫を保存します（各端末で1回設定）。Fine-grained トークンは対象リポジトリのみ・Contents 読み書きで発行してください。ファイルの中身はマスターパスワードで暗号化されるため、GitHub 上に平文は置かれません。</label>
+      <div class="cfg-grid">
+        <input id="cfg-owner" placeholder="owner（例: hayahide-cloud）" value="hayahide-cloud" autocapitalize="off" autocorrect="off" autocomplete="off">
+        <input id="cfg-repo" placeholder="repo（例: Hayahide-Log）" value="Hayahide-Log" autocapitalize="off" autocorrect="off" autocomplete="off">
+        <input id="cfg-path" placeholder="path（例: vault.json）" value="vault.json" autocapitalize="off" autocorrect="off" autocomplete="off">
+        <input id="cfg-branch" placeholder="branch（例: main）" value="main" autocapitalize="off" autocorrect="off" autocomplete="off">
+        <input id="cfg-token" type="password" placeholder="Fine-grained token（github_pat_...）" autocapitalize="off" autocorrect="off" autocomplete="off">
+      </div>
+      <div class="cfg-actions">
+        <button class="btn" id="cfg-save" type="button">保存して同期</button>
+        <button class="linkbtn danger" id="cfg-clear" type="button">この端末の設定を削除</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app"></div>
+  <footer>Shiden Vault — 保管庫は端末内でマスターパスワードにより暗号化（PBKDF2 → AES-256-GCM）。<br>トークン・平文データはこの公開ページにも GitHub にも含まれません</footer>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ================================================================
+   データ仕様
+   保存先: Hayahide-Log/vault.json（暗号化ファイル）
+     { format:"shiden-vault", v:1,
+       kdf:{ name:"PBKDF2", hash:"SHA-256", iter:600000, salt:<b64> },
+       iv:<b64>, ct:<b64>, updated:<ISO> }
+   復号後（保管庫）:
+     { v:1,
+       entries:[ { id, type:"login"|"token"|"note", name, ..., ct, mt } ],
+       apps:[ { id, name, url, storageKey, path } ],      // 紫電アプリ接続先
+       hub:{ tokenId, owner, repo, branch } }              // アプリに配布する接続情報
+
+   同期方式（Shiden Assets 流・操作キュー）
+   編集は操作キューに積み、同期時に最新リモートを復号 → 適用 → 再暗号化して PUT。
+   409（他端末が先に更新）は取り直して再適用。キューは端末内でも保管庫の鍵で
+   暗号化して保存する（ロック中・未同期でも平文を端末に残さない）。
+
+   紫電アプリ接続（自動接続）
+   同一オリジン hayahide-cloud.github.io 上の各アプリは localStorage を共有する。
+   このアプリが "shiden_hub_connection" に接続情報を書き、各アプリは自分の設定が
+   無いときにそれを取り込む（Shiden Assets / Dashboard 対応済）。既知アプリは
+   アプリ固有の設定キーへ直接書き込む。別オリジン・iOS ホーム画面 PWA
+   （ストレージが分離）向けには #shiden-connect=<base64url JSON> のリンク受け渡しも用意。
+   ================================================================ */
+const CFG_KEY = "shiden_vault_gh_cfg", CACHE_KEY = "shiden_vault_vault_cache", OPS_KEY = "shiden_vault_ops_v1",
+      PREF_KEY = "shiden_vault_prefs", HUB_KEY = "shiden_hub_connection";
+const KDF_ITER = 600000; // OWASP 推奨（PBKDF2-HMAC-SHA256）
+
+const TYPES = {
+  login: { label: "ログイン", emoji: "🔑",
+    fields: [
+      { key: "name",     label: "名前（サービス名）", req: true, placeholder: "Amazon" },
+      { key: "url",      label: "URL", placeholder: "https://", kind: "url", copy: true },
+      { key: "username", label: "ユーザー名 / メール", copy: true },
+      { key: "password", label: "パスワード", secret: true, copy: true, gen: true },
+      { key: "note",     label: "メモ", multi: true },
+      { key: "tags",     label: "タグ（スペース区切り）", placeholder: "買い物 仕事" },
+    ] },
+  token: { label: "トークン・APIキー", emoji: "🎫",
+    fields: [
+      { key: "name",    label: "名前", req: true, placeholder: "Hayahide-Log 用 Fine-grained token" },
+      { key: "service", label: "サービス", def: "GitHub", placeholder: "GitHub" },
+      { key: "secret",  label: "トークン / キー", req: true, secret: true, copy: true },
+      { key: "scope",   label: "権限・対象", placeholder: "Hayahide-Log / Contents 読み書き" },
+      { key: "expires", label: "有効期限", kind: "date", hint: "期限の14日前から一覧で警告する（Fine-grained token は最長1年）" },
+      { key: "url",     label: "管理ページURL", placeholder: "https://github.com/settings/personal-access-tokens", kind: "url", copy: true },
+      { key: "note",    label: "メモ", multi: true },
+      { key: "tags",    label: "タグ（スペース区切り）", placeholder: "github 紫電" },
+    ] },
+  note: { label: "セキュアメモ", emoji: "📝",
+    fields: [
+      { key: "name", label: "タイトル", req: true, placeholder: "Wi-Fi パスワード" },
+      { key: "body", label: "内容", multi: true, secret: true, copy: true },
+      { key: "tags", label: "タグ（スペース区切り）" },
+    ] },
+};
+
+// 紫電アプリの既定一覧。storageKey はそのアプリが localStorage に接続設定を置くキー
+// （空＝未対応。ハブ接続キーとリンク受け渡しのみ。アプリ側が対応したら設定で追記できる）
+const DEFAULT_APPS = [
+  { id: "dashboard",  name: "Shiden Dashboard",  url: "https://hayahide-cloud.github.io/Shiden-Dashboard/",  storageKey: "mtworks_gh_cfg",     path: "counters.json" },
+  { id: "assets",     name: "Shiden Assets",     url: "https://hayahide-cloud.github.io/Shiden-Assets/",     storageKey: "shiden_asset_gh_cfg", path: "dashboard.json" },
+  { id: "expense",    name: "Shiden Expense",    url: "https://hayahide-cloud.github.io/Shiden-Expense/",    storageKey: "", path: "" },
+  { id: "lifelogger", name: "Shiden LifeLogger", url: "https://hayahide-cloud.github.io/Shiden-LifeLogger/", storageKey: "", path: "" },
+  { id: "tasks",      name: "Shiden Tasks",      url: "https://hayahide-cloud.github.io/Shiden-Tasks/",      storageKey: "", path: "tasks.json" },
+];
+
+/* ---------- 基本ユーティリティ ---------- */
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function newId() { return (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : "p" + Date.now() + Math.random().toString(36).slice(2); }
+function today() { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+function hhmm() { const d = new Date(); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+function mdhm(ts) { const d = new Date(ts); return (d.getMonth() + 1) + "/" + d.getDate() + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+const clone = o => JSON.parse(JSON.stringify(o));
+const b64enc = s => btoa(unescape(encodeURIComponent(s)));
+const b64dec = s => decodeURIComponent(escape(atob((s || "").replace(/\n/g, ""))));
+const bytesToB64 = u8 => { let s = ""; u8.forEach(b => s += String.fromCharCode(b)); return btoa(s); };
+const b64ToBytes = b => Uint8Array.from(atob(b), c => c.charCodeAt(0));
+const b64url = s => b64enc(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function hostOf(u) { try { return new URL(u).host; } catch (e) { return u || ""; } }
+function daysLeft(ymd) { if (!ymd) return null; return Math.ceil((new Date(ymd + "T23:59:59") - new Date()) / 86400000); }
+function prefs() { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch (e) { return {}; } }
+function setPref(k, v) { const p = prefs(); p[k] = v; localStorage.setItem(PREF_KEY, JSON.stringify(p)); }
+
+let toastTimer = null;
+function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 1800); }
+async function copyText(text, label) {
+  try { await navigator.clipboard.writeText(text); toast((label || "") + "をコピーしました"); }
+  catch (e) { // クリップボード API が使えない環境（http 等）の保険
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); toast((label || "") + "をコピーしました"); } catch (e2) { alert("コピーできませんでした"); } ta.remove();
+  }
+}
+
+/* ---------- 暗号（WebCrypto） ----------
+   マスターパスワード → PBKDF2-HMAC-SHA256(60万回・16byteソルト) → AES-256-GCM 鍵。
+   鍵は extractable=false でメモリにのみ保持し、ロックで破棄する。 */
+async function deriveKey(password, salt, iter) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iter, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+async function encryptJson(key, obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+  return { iv: bytesToB64(iv), ct: bytesToB64(new Uint8Array(ct)) };
+}
+async function decryptJson(key, blob) { // 鍵（パスワード）が違えば GCM の認証で例外になる
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(blob.iv) }, key, b64ToBytes(blob.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+function newKdf() { return { name: "PBKDF2", hash: "SHA-256", iter: KDF_ITER, salt: bytesToB64(crypto.getRandomValues(new Uint8Array(16))) }; }
+async function keyFor(password, kdf) { return deriveKey(password, b64ToBytes(kdf.salt), kdf.iter || KDF_ITER); }
+async function packVault(key, kdf, vault) { const e = await encryptJson(key, vault); return { format: "shiden-vault", v: 1, kdf, iv: e.iv, ct: e.ct, updated: new Date().toISOString() }; }
+function isVaultFile(f) { return f && f.format === "shiden-vault" && f.kdf && f.iv && f.ct; }
+function strength(pw) { // 目安（文字種×長さ）。弱=赤・中=黄・強=緑
+  if (!pw) return { pct: 0, label: "", color: "var(--bad)" };
+  let classes = 0; if (/[a-z]/.test(pw)) classes++; if (/[A-Z]/.test(pw)) classes++; if (/\d/.test(pw)) classes++; if (/[^A-Za-z0-9]/.test(pw)) classes++;
+  const bits = pw.length * Math.log2([1, 26, 52, 62, 94][classes] || 26);
+  if (bits < 40) return { pct: 30, label: "弱い", color: "var(--bad)" };
+  if (bits < 64) return { pct: 60, label: "ふつう", color: "var(--warn)" };
+  return { pct: 100, label: "強い", color: "var(--good)" };
+}
+function genPassword(len, opts) {
+  let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  if (opts.digits) chars += "0123456789";
+  if (opts.symbols) chars += "!#$%&*+-=?@^_~";
+  const buf = crypto.getRandomValues(new Uint32Array(len));
+  let out = ""; for (let i = 0; i < len; i++) out += chars[buf[i] % chars.length];
+  return out;
+}
+
+/* ---------- 状態 ---------- */
+let KEY = null, KDF = null;      // 復号鍵と、その導出パラメータ（再暗号化に必要）
+let BASE = null;                 // 最後に同期した保管庫（復号済み）。表示は BASE に操作キューを適用したもの
+let PENDING = [];                // 未同期の操作キュー（メモリ）。端末には暗号化して保存
+let REMOTE_SHA = null;           // 取得済みリモートの sha（ロック画面でも使う）
+let REMOTE_FILE = undefined;     // 取得済みリモートファイル（undefined=未取得, null=無し）
+let REMOTE_ERR = "";             // 取得に失敗したときのメッセージ（ロック画面に表示）
+let ui = { q: "", type: "all", open: null, show: new Set(), form: null, editId: null, appForm: null, appEditId: null, settings: false, genLen: 20, genSym: true, genDig: true };
+let lockTimer = null;
+const app = document.getElementById("app");
+
+function skeleton() { return { v: 1, entries: [], apps: clone(DEFAULT_APPS), hub: { tokenId: "__self__", owner: "hayahide-cloud", repo: "Hayahide-Log", branch: "main" } }; }
+function normalize(v) { v = v || {}; v.v = 1; v.entries = v.entries || []; v.apps = v.apps || clone(DEFAULT_APPS); v.hub = Object.assign({ tokenId: "__self__", owner: "hayahide-cloud", repo: "Hayahide-Log", branch: "main" }, v.hub || {}); return v; }
+function viewData() { return KEY ? applyOps(clone(BASE), PENDING) : null; }
+
+/* ---------- 操作の適用（リモート最新に対して再適用できる純関数） ---------- */
+function applyOps(v, opList) {
+  opList.forEach(op => {
+    if (op.t === "add" || op.t === "upd") { // 冪等: 同じ id があれば置換（再適用で重複しない）
+      const i = v.entries.findIndex(x => x.id === op.item.id);
+      if (i >= 0) v.entries[i] = Object.assign({}, v.entries[i], clone(op.item)); else v.entries.push(clone(op.item));
+    } else if (op.t === "del") {
+      v.entries = v.entries.filter(x => x.id !== op.id);
+    } else if (op.t === "app") {
+      const i = v.apps.findIndex(x => x.id === op.item.id);
+      if (i >= 0) v.apps[i] = clone(op.item); else v.apps.push(clone(op.item));
+    } else if (op.t === "appdel") {
+      v.apps = v.apps.filter(x => x.id !== op.id);
+    } else if (op.t === "hub") {
+      v.hub = Object.assign({}, v.hub, clone(op.hub));
+    }
+  });
+  return v;
+}
+async function persistOps() { // キューは保管庫の鍵で暗号化して端末に保存（ロック中も平文を残さない）
+  if (!KEY) return;
+  if (!PENDING.length) { localStorage.removeItem(OPS_KEY); return; }
+  localStorage.setItem(OPS_KEY, JSON.stringify(await encryptJson(KEY, PENDING)));
+}
+async function restoreOps() {
+  const raw = localStorage.getItem(OPS_KEY);
+  if (!raw) { PENDING = []; return; }
+  try { PENDING = await decryptJson(KEY, JSON.parse(raw)); }
+  catch (e) { PENDING = []; localStorage.removeItem(OPS_KEY); toast("未同期の変更を復元できなかったため破棄しました"); }
+}
+async function pushOp(op) { PENDING.push(Object.assign({ opId: newId(), mt: Date.now() }, op)); await persistOps(); render(); scheduleSync(); }
+
+/* ---------- 自動ロック ---------- */
+function lockTimeoutMs() { const m = prefs().lockMin; return (m == null ? 5 : m) * 60000; }
+function touch() { clearTimeout(lockTimer); if (KEY && lockTimeoutMs() > 0) lockTimer = setTimeout(() => lock("一定時間操作がなかったためロックしました"), lockTimeoutMs()); }
+["click", "keydown", "touchstart", "input"].forEach(ev => document.addEventListener(ev, touch, { passive: true }));
+function lock(msg) {
+  KEY = null; KDF = null; BASE = null; PENDING = []; ui.open = null; ui.show = new Set(); ui.form = null; ui.editId = null; ui.settings = false; ui.q = "";
+  clearTimeout(lockTimer);
+  document.getElementById("gh-lock").style.display = "none";
+  render(); if (msg) toast(msg);
+}
+
+/* ---------- 画面 ---------- */
+function render() {
+  if (!KEY) return renderLocked();
+  document.getElementById("gh-lock").style.display = "";
+  const v = viewData();
+  app.innerHTML = alertsHtml(v) + entriesCard(v) + appsCard(v) + settingsCard(v);
+}
+
+function renderLocked() {
+  const c = getCfg();
+  const hasRemote = isVaultFile(REMOTE_FILE), hasCache = !!cachedFile();
+  if (REMOTE_FILE === undefined && cfgOk(c) && !hasCache) { // 取得中（boot が終わると再描画される）／取得失敗
+    app.innerHTML = REMOTE_ERR
+      ? `<div class="card lock"><div class="lk">⚠️</div><h2>保管庫を取得できません</h2><p>${esc(REMOTE_ERR)}<br>トークンや repo / path の設定を確認してください（新規作成は GitHub の確認ができてから）</p><div class="form-actions" style="justify-content:center"><button class="btn" id="retry">再試行</button></div></div>`
+      : `<div class="card lock"><div class="lk">🔒</div><h2>保管庫を確認中…</h2><p>GitHub から vault.json を取得しています</p></div>`;
+    const rb = document.getElementById("retry"); if (rb) rb.addEventListener("click", sync);
+    return;
+  }
+  if (hasRemote || hasCache) {
+    const prev = document.getElementById("mp"), prevVal = prev ? prev.value : ""; // 同期完了の再描画で入力中の文字を消さない
+    app.innerHTML = `<div class="card lock"><div class="lk">🔒</div><h2>ロック中</h2>
+      <p>マスターパスワードを入力して保管庫を開きます${hasRemote ? "" : "（オフライン：この端末のコピーを開きます）"}</p>
+      <div class="cfg-grid"><input class="fin" id="mp" type="password" placeholder="マスターパスワード" autocomplete="current-password" autocapitalize="off"></div>
+      <div class="form-actions" style="justify-content:center"><button class="btn" id="unlock">開く</button></div>
+      ${!cfgOk(c) ? `<p style="margin-top:12px">GitHub 同期は未設定です。右上の「設定」からトークンを登録すると他端末と同期できます。</p>` : ""}
+    </div>`;
+    const inp = document.getElementById("mp"); inp.value = prevVal;
+    document.getElementById("unlock").addEventListener("click", () => unlock(inp.value));
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") unlock(inp.value); });
+    setTimeout(() => inp.focus(), 50);
+    return;
+  }
+  app.innerHTML = `<div class="card lock"><div class="lk">🆕</div><h2>保管庫を作成</h2>
+    <p>最初にマスターパスワードを決めます。保管庫はこのパスワードから導出した鍵で暗号化され、<b>パスワードを忘れると復元できません</b>（GitHub にも平文は保存されません）。12文字以上・英数記号混在を推奨。</p>
+    <div class="cfg-grid">
+      <input class="fin" id="mp1" type="password" placeholder="マスターパスワード" autocomplete="new-password" autocapitalize="off">
+      <div class="strength"><i id="mpbar"></i></div><div class="fhint" id="mplabel" style="text-align:left"></div>
+      <input class="fin" id="mp2" type="password" placeholder="もう一度入力" autocomplete="new-password" autocapitalize="off">
+    </div>
+    <div class="form-actions" style="justify-content:center"><button class="btn" id="create">この内容で作成</button></div>
+    ${!cfgOk(c) ? `<p style="margin-top:12px">GitHub 同期が未設定のため、まずこの端末内にだけ（暗号化して）保存します。後から右上の「設定」で Hayahide-Log に同期できます。</p>` : ""}
+  </div>`;
+  const p1 = document.getElementById("mp1");
+  p1.addEventListener("input", () => { const s = strength(p1.value); const bar = document.getElementById("mpbar"); bar.style.width = s.pct + "%"; bar.style.background = s.color; document.getElementById("mplabel").textContent = s.label ? "強度: " + s.label : ""; });
+  document.getElementById("create").addEventListener("click", () => createVault(p1.value, document.getElementById("mp2").value));
+}
+
+function alertsHtml(v) {
+  const soon = v.entries.filter(e => e.type === "token" && e.expires && daysLeft(e.expires) <= 14).sort((a, b) => daysLeft(a.expires) - daysLeft(b.expires));
+  if (!soon.length) return "";
+  const expired = soon.filter(e => daysLeft(e.expires) < 0), near = soon.filter(e => daysLeft(e.expires) >= 0);
+  let h = "";
+  if (expired.length) h += `<div class="alert bad">⛔ 期限切れのトークン: ${expired.map(e => esc(e.name)).join("、")}。再発行して各アプリへ配布し直してください。</div>`;
+  if (near.length) h += `<div class="alert">⚠️ まもなく期限切れ: ${near.map(e => `${esc(e.name)}（あと${daysLeft(e.expires)}日）`).join("、")}</div>`;
+  return h;
+}
+
+function fieldHtml(f, val) {
+  const v = val == null ? (f.def || "") : val;
+  let input;
+  if (f.multi) input = `<textarea class="fin" data-fld="${f.key}" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(v)}</textarea>`;
+  else {
+    const type = f.secret ? "password" : (f.kind === "date" ? "date" : (f.kind === "url" ? "url" : "text"));
+    input = `<input class="fin" data-fld="${f.key}" type="${type}" value="${esc(v)}" placeholder="${esc(f.placeholder || "")}" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">`;
+    if (f.secret) input = `<div class="fwith">${input}<button class="cbtn ibtn" type="button" data-peek="${f.key}">表示</button>${f.gen ? `<button class="cbtn ibtn" type="button" data-gen="${f.key}">生成</button>` : ""}</div>`;
+  }
+  const gen = f.gen ? `<div class="gen"><span>長さ <b id="genlen-v">${ui.genLen}</b></span><input type="range" id="genlen" min="8" max="64" value="${ui.genLen}">
+      <label><input type="checkbox" id="gendig"${ui.genDig ? " checked" : ""}>数字</label><label><input type="checkbox" id="gensym"${ui.genSym ? " checked" : ""}>記号</label></div>` : "";
+  return `<div class="frow"><span class="flabel">${f.label}${f.req ? " *" : ""}</span>${input}${gen}${f.hint ? `<span class="fhint">${f.hint}</span>` : ""}</div>`;
+}
+
+function entryForm(v) {
+  const edit = ui.editId ? v.entries.find(e => e.id === ui.editId) : null;
+  const type = edit ? edit.type : (ui.form || "login");
+  const T = TYPES[type];
+  return `<div class="addform open" data-form="entry" data-type="${type}">
+    ${edit ? `<div class="fhint" style="margin-bottom:10px">${T.emoji} ${T.label} を編集</div>` : `<div class="frow"><span class="flabel">種類</span><select class="fin" id="ftype">${Object.entries(TYPES).map(([k, t]) => `<option value="${k}"${k === type ? " selected" : ""}>${t.emoji} ${t.label}</option>`).join("")}</select></div>`}
+    ${T.fields.map(f => fieldHtml(f, edit ? edit[f.key] : null)).join("")}
+    <div class="form-actions">
+      <button class="cbtn rec" data-submit="entry">${edit ? "更新する" : "追加する"}</button>
+      <button class="cbtn undo" data-cancel="1">キャンセル</button>
+    </div>
+  </div>`;
+}
+
+function entryRow(e, v) {
+  const T = TYPES[e.type] || TYPES.note;
+  const dl = e.type === "token" ? daysLeft(e.expires) : null;
+  const badge = dl == null ? "" : (dl < 0 ? `<span class="badge bad">期限切れ</span>` : (dl <= 14 ? `<span class="badge warn">あと${dl}日</span>` : ""));
+  const sub = e.type === "login" ? [e.username, hostOf(e.url)].filter(Boolean).join(" / ")
+            : e.type === "token" ? [e.service, e.scope, e.expires ? "期限 " + e.expires : ""].filter(Boolean).join(" / ")
+            : (e.tags || "");
+  const quick = e.type === "login" && e.password ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="password">PWコピー</button>`
+              : e.type === "token" && e.secret ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="secret">コピー</button>` : "";
+  const isOpen = ui.open === e.id;
+  const detail = isOpen ? `<div class="detail">${T.fields.filter(f => f.key !== "name" && e[f.key]).map(f => {
+      const shown = !f.secret || ui.show.has(e.id + ":" + f.key);
+      let val = f.key === "tags" ? (e.tags || "").split(/\s+/).filter(Boolean).map(t => `<span class="badge tag">${esc(t)}</span>`).join("")
+              : f.kind === "url" ? `<a href="${esc(e[f.key])}" target="_blank" rel="noopener noreferrer">${esc(e[f.key])}</a>`
+              : shown ? esc(e[f.key]).replace(/\n/g, "<br>") : "••••••••••••";
+      return `<div class="drow"><span class="dlab">${f.label.replace(/（.*?）/, "")}</span><span class="dval${f.secret && shown ? " mono" : ""}${f.secret && !shown ? " masked" : ""}">${val}</span>
+        ${f.secret ? `<button class="cbtn ibtn" data-peek-e="${e.id}" data-key="${f.key}">${shown ? "隠す" : "表示"}</button>` : ""}
+        ${f.copy ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="${f.key}">コピー</button>` : ""}</div>`;
+    }).join("")}
+    <div class="drow"><span class="dlab">更新</span><span class="dval" style="font-size:12px;color:var(--muted)">${e.mt ? mdhm(e.mt) : "—"}</span>
+      <button class="cbtn ibtn" data-edit="${e.id}">編集</button><button class="cbtn ibtn danger" data-del="${e.id}">削除</button></div>
+    </div>` : "";
+  return `<div class="irow" data-toggle="${e.id}">
+      <span class="iico">${T.emoji}</span>
+      <span class="iname">${esc(e.name)}${badge}<span class="isub">${esc(sub)}</span></span>
+      <span class="iact">${quick}</span>
+    </div>${detail}`;
+}
+
+function entriesCard(v) {
+  const q = ui.q.trim().toLowerCase();
+  const list = v.entries.filter(e => ui.type === "all" || e.type === ui.type)
+    .filter(e => !q || [e.name, e.username, e.url, e.service, e.scope, e.tags, e.note].filter(Boolean).join(" ").toLowerCase().includes(q))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "ja"));
+  const chip = (t, label) => `<button class="chip${ui.type === t ? " sel" : ""}" data-filter="${t}">${label}</button>`;
+  const formOpen = ui.form || ui.editId;
+  return `<div class="card">
+    <div class="chead"><span class="cemoji">🔐</span><span class="cname">保管庫</span><span class="csum"><b>${v.entries.length}</b>件</span></div>
+    <div class="toolbar"><input class="fin" id="q" type="search" placeholder="検索（名前・ユーザー名・URL・タグ）" value="${esc(ui.q)}" autocapitalize="off" autocomplete="off"><button class="cbtn rec" data-open="entry">${formOpen ? "閉じる" : "＋ 追加"}</button></div>
+    <div class="chips">${chip("all", "すべて")}${chip("login", "🔑 ログイン")}${chip("token", "🎫 トークン")}${chip("note", "📝 メモ")}</div>
+    ${formOpen ? entryForm(v) : ""}
+    <div class="items">${list.length ? list.map(e => entryRow(e, v)).join("") : `<div class="iempty">${v.entries.length ? "該当する項目がありません" : "まだ登録がありません。「＋ 追加」からパスワードやトークンを保存できます"}</div>`}</div>
+    ${PENDING.length ? `<div class="pending-note">未同期の変更が ${PENDING.length} 件あります（${cfgOk(getCfg()) ? "自動で同期されます" : "GitHub 設定後に同期されます"}）</div>` : ""}
+  </div>`;
+}
+
+/* ---------- 紫電アプリ接続 ---------- */
+function hubConnection(v) { // 配布する接続情報。tokenId が "__self__" ならこのアプリ自身の GitHub トークン
+  const c = getCfg(), h = v.hub || {};
+  let token = "", label = "";
+  if (!h.tokenId || h.tokenId === "__self__") { token = c.token || ""; label = "このアプリの接続トークン"; }
+  else { const e = v.entries.find(x => x.id === h.tokenId); token = e ? e.secret || "" : ""; label = e ? e.name : "（削除されたトークン）"; }
+  return { v: 1, owner: h.owner || c.owner || "", repo: h.repo || c.repo || "", branch: h.branch || c.branch || "main", token, label, updated: new Date().toISOString(), source: "shiden-vault" };
+}
+function hubPayload(conn) { const { label, ...p } = conn; return p; }
+function appState(a) { // この端末（同一オリジン）でそのアプリが接続済みか
+  if (!a.storageKey) return null;
+  try { const c = JSON.parse(localStorage.getItem(a.storageKey)) || {}; return !!c.token; } catch (e) { return false; }
+}
+function appsCard(v) {
+  const conn = hubConnection(v), ok = !!(conn.token && conn.owner && conn.repo);
+  const tokens = v.entries.filter(e => e.type === "token");
+  const c = getCfg();
+  const selfRegistered = !!(c.token && tokens.some(t => t.secret === c.token));
+  const rows = v.apps.map(a => {
+    const st = appState(a);
+    const stText = a.storageKey ? (st ? `<span class="ok">● この端末で接続済み</span>` : `<span class="ng">○ この端末は未接続</span>`) : `<span class="ng">ハブ接続のみ（アプリ側の対応待ち）</span>`;
+    return `<div class="approw">
+      <div class="apphead"><span class="iico">⚡</span><span class="iname">${esc(a.name)}<span class="isub">${esc(hostOf(a.url))}${a.path ? " / " + esc(a.path) : ""} — ${stText}</span></span>
+        <span class="iact"><button class="cbtn ibtn" data-appedit="${a.id}">編集</button></span></div>
+      <div class="appbtns">
+        <button class="cbtn ibtn" data-appwrite="${a.id}"${ok ? "" : " disabled"}>この端末に書き込む</button>
+        <button class="cbtn ibtn" data-applink="${a.id}"${ok ? "" : " disabled"}>接続して開く</button>
+        <a class="cbtn ibtn" href="${esc(a.url)}" target="_blank" rel="noopener" style="text-decoration:none">開く</a>
+      </div>
+    </div>`;
+  }).join("");
+  const edit = ui.appEditId ? v.apps.find(a => a.id === ui.appEditId) : null;
+  const appForm = (ui.appForm || edit) ? `<div class="addform open" data-form="app">
+      <div class="frow"><span class="flabel">アプリ名 *</span><input class="fin" data-afld="name" value="${esc(edit ? edit.name : "")}" placeholder="Shiden Plants Manager"></div>
+      <div class="frow"><span class="flabel">URL *</span><input class="fin" data-afld="url" type="url" value="${esc(edit ? edit.url : "https://hayahide-cloud.github.io/")}" autocapitalize="off" autocomplete="off"></div>
+      <div class="frow"><span class="flabel">設定キー（localStorage）</span><input class="fin" data-afld="storageKey" value="${esc(edit ? edit.storageKey : "")}" placeholder="例: shiden_asset_gh_cfg" autocapitalize="off" autocomplete="off"><span class="fhint">アプリが接続設定を保存しているキー。空なら共通のハブ接続キー（shiden_hub_connection）とリンク受け渡しだけを使う</span></div>
+      <div class="frow"><span class="flabel">データファイル（path）</span><input class="fin" data-afld="path" value="${esc(edit ? edit.path : "")}" placeholder="例: dashboard.json" autocapitalize="off" autocomplete="off"><span class="fhint">アプリ側に path 設定が無いときの既定値（既にあればそちらを維持）</span></div>
+      <div class="form-actions"><button class="cbtn rec" data-submit="app">${edit ? "更新する" : "追加する"}</button><button class="cbtn undo" data-appcancel="1">キャンセル</button>${edit ? `<button class="cbtn danger" data-appdel="${edit.id}">削除</button>` : ""}</div>
+    </div>` : "";
+  return `<div class="card">
+    <div class="chead"><span class="cemoji">🔗</span><span class="cname">紫電アプリ接続</span><span class="csum">${ok ? `<span class="ok">配布可</span>` : `<span class="ng">トークン未設定</span>`}</span></div>
+    <div class="hint">各アプリに Hayahide-Log の接続情報（owner / repo / branch / トークン）を配り、アプリ側でトークンを打ち直さなくて済むようにします。同じ端末・同じブラウザ（hayahide-cloud.github.io）なら「この端末に書き込む」、iOS のホーム画面アプリなど保存領域が別の場合は「接続して開く」か、トークンをコピーしてアプリの設定に貼り付けてください。</div>
+    <div class="frow"><span class="flabel">配布するトークン</span><select class="fin" id="hub-token">
+      <option value="__self__"${(!v.hub.tokenId || v.hub.tokenId === "__self__") ? " selected" : ""}>このアプリの接続トークン（設定の Fine-grained token）</option>
+      ${tokens.map(t => `<option value="${t.id}"${v.hub.tokenId === t.id ? " selected" : ""}>${esc(t.name)}${t.expires ? "（期限 " + esc(t.expires) + "）" : ""}</option>`).join("")}
+    </select><span class="fhint">現在: ${esc(conn.label)}${conn.token ? "" : " — トークンがありません"}</span></div>
+    <div class="frow"><span class="flabel">接続先リポジトリ</span><div class="fwith"><input class="fin" id="hub-owner" value="${esc(v.hub.owner)}" placeholder="owner" autocapitalize="off" autocomplete="off"><input class="fin" id="hub-repo" value="${esc(v.hub.repo)}" placeholder="repo" autocapitalize="off" autocomplete="off"><input class="fin" id="hub-branch" value="${esc(v.hub.branch)}" placeholder="branch" style="flex:0 1 6em" autocapitalize="off" autocomplete="off"></div></div>
+    <div class="form-actions">
+      <button class="cbtn" id="hub-save">配布設定を保存</button>
+      <button class="cbtn rec" id="hub-writeall"${ok ? "" : " disabled"}>この端末の全アプリに書き込む</button>
+      <button class="cbtn" id="hub-copy"${ok ? "" : " disabled"}>トークンをコピー</button>
+      ${c.token && !selfRegistered ? `<button class="cbtn" id="hub-register">このアプリの接続トークンを保管庫に登録</button>` : ""}
+    </div>
+    <div class="items" style="margin-top:12px">${rows}</div>
+    <div class="form-actions"><button class="cbtn" data-open="app">${ui.appForm ? "閉じる" : "＋ アプリを追加"}</button></div>
+    ${appForm}
+  </div>`;
+}
+function writeAppConnection(a, conn) {
+  const payload = hubPayload(conn);
+  localStorage.setItem(HUB_KEY, JSON.stringify(payload));
+  if (!a.storageKey) return "ハブ接続キーに書き込みました（" + a.name + " 側の対応後に自動取り込み）";
+  let cur = {}; try { cur = JSON.parse(localStorage.getItem(a.storageKey)) || {}; } catch (e) {}
+  const next = Object.assign({}, cur, { owner: conn.owner, repo: conn.repo, branch: conn.branch, token: conn.token });
+  if (!next.path && a.path) next.path = a.path;
+  localStorage.setItem(a.storageKey, JSON.stringify(next));
+  return a.name + " の接続設定を書き込みました";
+}
+
+/* ---------- 設定カード ---------- */
+function settingsCard(v) {
+  const p = prefs(), lockMin = p.lockMin == null ? 5 : p.lockMin;
+  const opt = (m, label) => `<option value="${m}"${lockMin === m ? " selected" : ""}>${label}</option>`;
+  const c = getCfg();
+  return `<div class="card">
+    <div class="chead"><span class="cemoji">⚙️</span><span class="cname">保管庫の設定</span><span class="csum">${cfgOk(c) ? esc(c.owner + "/" + c.repo + "/" + c.path) : "GitHub 未設定"}</span></div>
+    <div class="frow"><span class="flabel">自動ロック</span><select class="fin" id="lockmin">${opt(1, "1分")}${opt(5, "5分")}${opt(15, "15分")}${opt(60, "60分")}${opt(0, "しない（非推奨）")}</select><span class="fhint">操作が無い時間が続くと鍵を破棄してロック画面に戻る</span></div>
+    <div class="form-actions"><button class="cbtn" id="toggle-settings">${ui.settings ? "詳細を閉じる" : "マスターパスワード変更・エクスポート"}</button></div>
+    ${ui.settings ? `<div class="addform open">
+      <div class="frow"><span class="flabel">マスターパスワードの変更</span>
+        <input class="fin" id="np1" type="password" placeholder="新しいマスターパスワード" autocomplete="new-password" autocapitalize="off">
+        <input class="fin" id="np2" type="password" placeholder="もう一度入力" autocomplete="new-password" autocapitalize="off">
+        <span class="fhint">未同期の変更を先に同期してから、保管庫全体を新しい鍵で暗号化し直して保存する。他端末は次回ロック解除時に新しいパスワードが必要</span></div>
+      <div class="form-actions"><button class="cbtn rec" id="np-save">変更する</button></div>
+      <div class="frow" style="margin-top:14px"><span class="flabel">バックアップ</span><span class="fhint">復号済み（平文）の JSON をダウンロードする。安全な場所にのみ保存すること</span></div>
+      <div class="form-actions"><button class="cbtn" id="export">平文JSONをエクスポート</button><button class="cbtn" id="export-enc">暗号化ファイルをエクスポート</button></div>
+      <div class="frow" style="margin-top:14px"><span class="fhint">暗号: PBKDF2-HMAC-SHA256 ${KDF ? (KDF.iter || KDF_ITER).toLocaleString() : ""} 回 → AES-256-GCM。項目 ${v.entries.length} 件・接続先 ${v.apps.length} 件</span></div>
+    </div>` : ""}
+  </div>`;
+}
+
+/* ---------- 操作イベント ---------- */
+app.addEventListener("input", e => {
+  if (e.target.id === "q") { ui.q = e.target.value; const v = viewData(); const items = app.querySelector(".items"); const html = entriesCard(v); const tmp = document.createElement("div"); tmp.innerHTML = html; items.innerHTML = tmp.querySelector(".items").innerHTML; }
+  if (e.target.id === "genlen") { ui.genLen = Number(e.target.value); document.getElementById("genlen-v").textContent = ui.genLen; }
+});
+app.addEventListener("change", e => {
+  if (e.target.id === "ftype") { ui.form = e.target.value; render(); }
+  if (e.target.id === "gendig") ui.genDig = e.target.checked;
+  if (e.target.id === "gensym") ui.genSym = e.target.checked;
+  if (e.target.id === "lockmin") { setPref("lockMin", Number(e.target.value)); touch(); toast("自動ロックを変更しました"); }
+});
+app.addEventListener("click", async e => {
+  const v = viewData(); if (!v) return;
+  const btn = e.target.closest("button, a");
+  // 一覧行のタップで詳細を開閉（ボタン・リンク・詳細内のタップは除く）
+  if (!btn) { const row = e.target.closest("[data-toggle]"); if (row) { ui.open = ui.open === row.dataset.toggle ? null : row.dataset.toggle; render(); } return; }
+  const d = btn.dataset;
+
+  if (d.open === "entry") { ui.editId = null; ui.form = ui.form ? null : "login"; render(); return; }
+  if (d.open === "app") { ui.appEditId = null; ui.appForm = !ui.appForm; render(); return; }
+  if (d.cancel) { ui.form = null; ui.editId = null; render(); return; }
+  if (d.appcancel) { ui.appForm = false; ui.appEditId = null; render(); return; }
+  if (d.filter) { ui.type = d.filter; render(); return; }
+
+  if (d.peek) { const inp = app.querySelector(`[data-fld="${d.peek}"]`); inp.type = inp.type === "password" ? "text" : "password"; btn.textContent = inp.type === "password" ? "表示" : "隠す"; return; }
+  if (d.gen) { const inp = app.querySelector(`[data-fld="${d.gen}"]`); inp.value = genPassword(ui.genLen, { digits: ui.genDig, symbols: ui.genSym }); inp.type = "text"; const pk = app.querySelector(`[data-peek="${d.gen}"]`); if (pk) pk.textContent = "隠す"; return; }
+  if (d.peekE) { const k = d.peekE + ":" + d.key; ui.show.has(k) ? ui.show.delete(k) : ui.show.add(k); render(); return; }
+  if (d.copy) { const it = v.entries.find(x => x.id === d.copy); if (it && it[d.key]) copyText(it[d.key], TYPES[it.type].fields.find(f => f.key === d.key).label.replace(/（.*?）/, "")); return; }
+
+  if (d.edit) { ui.editId = d.edit; ui.form = null; render(); app.querySelector(`.addform[data-form="entry"]`).scrollIntoView({ block: "nearest" }); return; }
+  if (d.del) { const it = v.entries.find(x => x.id === d.del); if (!confirm(`「${it ? it.name : ""}」を削除しますか？`)) return; ui.open = null; await pushOp({ t: "del", id: d.del }); return; }
+  if (d.submit === "entry") {
+    const form = app.querySelector(`.addform[data-form="entry"]`), type = form.dataset.type, T = TYPES[type];
+    const item = { type };
+    for (const f of T.fields) {
+      const raw = form.querySelector(`[data-fld="${f.key}"]`).value;
+      const val = f.multi ? raw.replace(/\s+$/, "") : raw.trim();
+      if (f.req && !val) { alert(f.label.replace(/（.*?）/, "") + "は必須です。"); return; }
+      item[f.key] = val;
+    }
+    item.mt = Date.now();
+    if (ui.editId) { item.id = ui.editId; const ed = ui.editId; ui.editId = null; await pushOp({ t: "upd", item: Object.assign({ ct: (v.entries.find(x => x.id === ed) || {}).ct }, item) }); }
+    else { item.id = newId(); item.ct = Date.now(); ui.form = null; await pushOp({ t: "add", item }); }
+    return;
+  }
+
+  // 紫電アプリ接続
+  if (btn.id === "hub-save") {
+    await pushOp({ t: "hub", hub: { tokenId: document.getElementById("hub-token").value, owner: document.getElementById("hub-owner").value.trim(), repo: document.getElementById("hub-repo").value.trim(), branch: document.getElementById("hub-branch").value.trim() || "main" } });
+    toast("配布設定を保存しました"); return;
+  }
+  if (btn.id === "hub-copy") { const conn = hubConnection(v); if (conn.token) copyText(conn.token, "トークン"); return; }
+  if (btn.id === "hub-register") {
+    const c = getCfg();
+    await pushOp({ t: "add", item: { id: newId(), type: "token", name: `${c.repo} 用 Fine-grained token（${c.owner}）`, service: "GitHub", secret: c.token, scope: `${c.owner}/${c.repo} / Contents 読み書き`, expires: "", url: "https://github.com/settings/personal-access-tokens", note: "Shiden Vault の接続設定から登録。有効期限は GitHub の設定ページで確認して記入する", tags: "github 紫電", ct: Date.now(), mt: Date.now() } });
+    toast("トークンを保管庫に登録しました"); return;
+  }
+  if (btn.id === "hub-writeall") {
+    const conn = hubConnection(v); if (!conn.token) return;
+    const n = v.apps.filter(a => a.storageKey).map(a => writeAppConnection(a, conn)).length;
+    localStorage.setItem(HUB_KEY, JSON.stringify(hubPayload(conn)));
+    toast(`${n} 個のアプリとハブ接続キーに書き込みました`); render(); return;
+  }
+  if (d.appwrite) { const a = v.apps.find(x => x.id === d.appwrite), conn = hubConnection(v); if (a && conn.token) { toast(writeAppConnection(a, conn)); render(); } return; }
+  if (d.applink) {
+    const a = v.apps.find(x => x.id === d.applink), conn = hubConnection(v); if (!a || !conn.token) return;
+    // フラグメント(#)はサーバーに送られない。受け取ったアプリ側は取り込み後すぐ URL から消す
+    window.open(a.url.replace(/#.*$/, "") + "#shiden-connect=" + b64url(JSON.stringify(hubPayload(conn))), "_blank", "noopener");
+    return;
+  }
+  if (d.appedit) { ui.appEditId = d.appedit; ui.appForm = false; render(); app.querySelector(`.addform[data-form="app"]`).scrollIntoView({ block: "nearest" }); return; }
+  if (d.appdel) { if (!confirm("この接続先を一覧から削除しますか？")) return; ui.appEditId = null; await pushOp({ t: "appdel", id: d.appdel }); return; }
+  if (d.submit === "app") {
+    const form = app.querySelector(`.addform[data-form="app"]`), get = k => form.querySelector(`[data-afld="${k}"]`).value.trim();
+    const item = { id: ui.appEditId || newId(), name: get("name"), url: get("url"), storageKey: get("storageKey"), path: get("path") };
+    if (!item.name || !item.url) { alert("アプリ名と URL は必須です。"); return; }
+    ui.appEditId = null; ui.appForm = false;
+    await pushOp({ t: "app", item }); return;
+  }
+
+  // 設定
+  if (btn.id === "toggle-settings") { ui.settings = !ui.settings; render(); return; }
+  if (btn.id === "np-save") { await changeMaster(document.getElementById("np1").value, document.getElementById("np2").value); return; }
+  if (btn.id === "export") {
+    if (!confirm("平文（復号済み）の JSON をダウンロードします。保存先に注意してください。続けますか？")) return;
+    download("shiden-vault-plain-" + today() + ".json", JSON.stringify(v, null, 2)); return;
+  }
+  if (btn.id === "export-enc") {
+    const file = await packVault(KEY, KDF, applyOps(clone(BASE), PENDING));
+    download("shiden-vault-" + today() + ".json", JSON.stringify(file, null, 2)); return;
+  }
+});
+function download(name, text) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "application/json" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
+
+/* ---------- 保管庫の作成・解錠・鍵の変更 ---------- */
+function cachedFile() { try { const f = JSON.parse(localStorage.getItem(CACHE_KEY)); return isVaultFile(f) ? f : null; } catch (e) { return null; } }
+function setCache(f) { if (f) localStorage.setItem(CACHE_KEY, JSON.stringify(f)); else localStorage.removeItem(CACHE_KEY); }
+
+async function createVault(p1, p2) {
+  if (p1.length < 8) { alert("マスターパスワードは8文字以上にしてください（12文字以上を推奨）。"); return; }
+  if (p1 !== p2) { alert("確認用のパスワードが一致しません。"); return; }
+  status("鍵を生成中…");
+  const kdf = newKdf(), key = await keyFor(p1, kdf), vault = skeleton();
+  const file = await packVault(key, kdf, vault);
+  KEY = key; KDF = kdf; BASE = vault; PENDING = [];
+  setCache(file);
+  touch(); render(); toast("保管庫を作成しました");
+  // リモートが無ければ初回 PUT（設定済みの場合）
+  if (cfgOk(getCfg())) sync(); else status("GitHub 未設定（この端末内にのみ暗号化保存）");
+}
+async function unlock(pw) {
+  if (!pw) return;
+  const file = isVaultFile(REMOTE_FILE) ? REMOTE_FILE : cachedFile();
+  if (!file) return;
+  status("復号中…");
+  try {
+    const key = await keyFor(pw, file.kdf);
+    const vault = normalize(await decryptJson(key, file));
+    KEY = key; KDF = file.kdf; BASE = vault;
+    setCache(REMOTE_SHA && file === REMOTE_FILE ? Object.assign({}, file, { sha: REMOTE_SHA }) : file);
+    await restoreOps();
+    touch(); render();
+    status(cfgOk(getCfg()) ? "ロック解除 " + hhmm() : "GitHub 未設定（この端末内にのみ暗号化保存）");
+    if (PENDING.length) scheduleSync();
+  } catch (e) { status("ロック中"); alert("マスターパスワードが違います。"); }
+}
+async function changeMaster(p1, p2) {
+  if (p1.length < 8) { alert("新しいマスターパスワードは8文字以上にしてください。"); return; }
+  if (p1 !== p2) { alert("確認用のパスワードが一致しません。"); return; }
+  if (!confirm("マスターパスワードを変更します。他の端末では次回から新しいパスワードが必要になります。続けますか？")) return;
+  const c = getCfg();
+  // GitHub 設定済みなら先に同期して「リモート＝最新」の状態にしてから鍵を変える。
+  // 未設定なら端末内の暗号化コピーとキューを新しい鍵で暗号化し直すだけでよい
+  if (cfgOk(c) && PENDING.length) { await sync(); if (PENDING.length) { alert("未同期の変更が残っているため変更できません。同期が成功してから再度お試しください。"); return; } }
+  status("鍵を再生成中…");
+  try {
+    const kdf = newKdf(), key = await keyFor(p1, kdf);
+    if (cfgOk(c)) {
+      const remote = await ghGet(c);
+      const cur = remote.data ? normalize(await decryptJson(KEY, remote.data)) : BASE;
+      const file = await packVault(key, kdf, cur);
+      REMOTE_SHA = await ghPut(c, file, remote.sha);
+      REMOTE_FILE = file; BASE = cur; setCache(file);
+    } else {
+      const file = await packVault(key, kdf, BASE); setCache(file);
+    }
+    KEY = key; KDF = kdf; await persistOps();
+    ui.settings = false; render(); status("マスターパスワードを変更しました " + hhmm()); toast("変更しました");
+  } catch (e) { status("変更失敗: " + e.message); alert("変更に失敗しました: " + e.message); }
+}
+
+/* ---------- GitHub 同期（Shiden Assets と同方式） ---------- */
+const statusEl = document.getElementById("gh-status");
+const panel = document.getElementById("gh-cfg-panel");
+function getCfg() { try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch (e) { return {}; } }
+function setCfg(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
+function cfgOk(c) { return c && c.owner && c.repo && c.path && c.token; }
+function status(m) { statusEl.textContent = m; }
+
+async function ghGet(c) {
+  // キャッシュから古い sha が返ると PUT が 409 で失敗し続けるため no-store で常に最新を取る
+  const url = `https://api.github.com/repos/${c.owner}/${c.repo}/contents/${c.path}?ref=${c.branch || "main"}&t=${Date.now()}`;
+  const r = await fetch(url, { cache: "no-store", headers: { Authorization: "Bearer " + c.token, Accept: "application/vnd.github+json" } });
+  if (r.status === 404) return { data: null, sha: null };
+  if (!r.ok) throw new Error("GET " + r.status);
+  const j = await r.json();
+  return { data: JSON.parse(b64dec(j.content)), sha: j.sha };
+}
+async function ghPut(c, obj, sha) {
+  const url = `https://api.github.com/repos/${c.owner}/${c.repo}/contents/${c.path}`;
+  const body = { message: "vault " + new Date().toISOString(), content: b64enc(JSON.stringify(obj, null, 2)), branch: c.branch || "main" };
+  if (sha) body.sha = sha;
+  const r = await fetch(url, { method: "PUT", headers: { Authorization: "Bearer " + c.token, Accept: "application/vnd.github+json", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error("PUT " + r.status);
+  return (await r.json()).content.sha;
+}
+
+async function syncOnce(c) {
+  const remote = await ghGet(c);
+  REMOTE_SHA = remote.sha; REMOTE_FILE = remote.data; REMOTE_ERR = "";
+  if (!KEY) return; // ロック中は取得だけ（解錠画面で最新ファイルを使う）
+  let base;
+  if (remote.data) {
+    if (!isVaultFile(remote.data)) throw new Error("vault.json の形式が不正です");
+    try { base = normalize(await decryptJson(KEY, remote.data)); }
+    catch (e) { lock("リモートの保管庫が別のマスターパスワードで暗号化されています。新しいパスワードで開き直してください"); throw new Error("鍵が一致しません"); }
+  } else base = BASE; // リモート未作成 → この端末の保管庫を初回アップロード
+  const opsSnap = PENDING.slice(); // PUT 中に積まれた操作を消さないよう、適用した分だけ後で除く
+  if (remote.data && !opsSnap.length && remote.sha === (cachedFile() || {}).sha) { BASE = base; return; }
+  if (remote.data && !opsSnap.length) { // 他端末の更新を取り込むだけ（無駄なコミットを作らない）
+    BASE = base; setCache(Object.assign({}, remote.data, { sha: remote.sha })); return;
+  }
+  const merged = applyOps(base, clone(opsSnap));
+  const file = await packVault(KEY, KDF, merged);
+  const sha = await ghPut(c, file, remote.sha);
+  BASE = merged; REMOTE_SHA = sha; REMOTE_FILE = file; setCache(Object.assign({}, file, { sha }));
+  PENDING = PENDING.filter(o => !opsSnap.some(s => s.opId === o.opId)); await persistOps();
+}
+let syncing = false, syncTimer = null;
+async function sync() {
+  const c = getCfg();
+  if (!cfgOk(c)) { status(KEY ? "GitHub 未設定（この端末内にのみ暗号化保存）" : "未設定"); return; }
+  if (syncing) return;
+  syncing = true; status("同期中…");
+  try {
+    let done = false, lastErr;
+    for (let i = 0; i < 5 && !done; i++) { // 409 は他端末の更新。最新 sha を取り直して再試行
+      try { await syncOnce(c); done = true; }
+      catch (e) { lastErr = e; if (!/\b409\b/.test(e.message)) throw e; }
+    }
+    if (!done) throw lastErr;
+    render(); status((KEY ? "同期完了 " : "取得完了 ") + hhmm());
+  } catch (e) {
+    if (REMOTE_FILE === undefined) REMOTE_ERR = e.message;
+    if (KEY || !/鍵/.test(e.message)) status("同期失敗: " + e.message);
+    render();
+  } finally { syncing = false; }
+}
+function scheduleSync() { if (!cfgOk(getCfg())) return; clearTimeout(syncTimer); syncTimer = setTimeout(sync, 2000); }
+
+function fillCfg() {
+  const c = getCfg();
+  document.getElementById("cfg-owner").value = c.owner || "hayahide-cloud";
+  document.getElementById("cfg-repo").value = c.repo || "Hayahide-Log";
+  document.getElementById("cfg-path").value = c.path || "vault.json";
+  document.getElementById("cfg-branch").value = c.branch || "main";
+  document.getElementById("cfg-token").value = c.token || "";
+}
+document.getElementById("gh-config").addEventListener("click", () => { fillCfg(); panel.classList.toggle("open"); });
+document.getElementById("cfg-save").addEventListener("click", async () => {
+  setCfg({
+    owner: document.getElementById("cfg-owner").value.trim() || "hayahide-cloud",
+    repo: document.getElementById("cfg-repo").value.trim() || "Hayahide-Log",
+    path: document.getElementById("cfg-path").value.trim() || "vault.json",
+    branch: document.getElementById("cfg-branch").value.trim() || "main",
+    token: document.getElementById("cfg-token").value.trim(),
+  });
+  panel.classList.remove("open");
+  REMOTE_FILE = undefined; REMOTE_ERR = ""; render();
+  await sync(); render();
+});
+document.getElementById("cfg-clear").addEventListener("click", () => {
+  if (!confirm("この端末の GitHub 設定（トークン）と、端末内の暗号化コピー・未同期の変更を削除します。保管庫本体（GitHub 上）は残ります。続けますか？")) return;
+  localStorage.removeItem(CFG_KEY); setCache(null); localStorage.removeItem(OPS_KEY); fillCfg(); lock(); REMOTE_FILE = undefined; status("設定を削除しました"); render();
+});
+document.getElementById("gh-sync").addEventListener("click", sync);
+document.getElementById("gh-lock").addEventListener("click", () => lock("ロックしました"));
+
+// 他端末のロック解除中に Hayahide-Log 側の接続情報を取り込む（このアプリ自身も紫電アプリの一員）
+(function adoptHubConnection() {
+  const m = location.hash.match(/[#&]shiden-connect=([A-Za-z0-9_-]+)/);
+  if (!m) return;
+  let hub = null;
+  try { hub = JSON.parse(b64dec(m[1].replace(/-/g, "+").replace(/_/g, "/"))); } catch (e) {}
+  history.replaceState(null, "", location.pathname + location.search);
+  if (!hub || !hub.token || !hub.owner || !hub.repo) return;
+  const c = getCfg();
+  setCfg(Object.assign({}, c, { owner: hub.owner, repo: hub.repo, branch: hub.branch || "main", token: hub.token, path: c.path || "vault.json" }));
+})();
+
+async function boot() {
+  render();
+  if (cfgOk(getCfg())) { status("取得中…"); await sync(); render(); }
+  else status(cachedFile() ? "GitHub 未設定（この端末内の暗号化コピー）" : "未設定（右上の「設定」からトークンを登録）");
+}
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "Shiden Vault",
+  "short_name": "紫電Vault",
+  "description": "パスワード・トークンの暗号化保管庫（GitHub同期）",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#09060f",
+  "theme_color": "#09060f",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

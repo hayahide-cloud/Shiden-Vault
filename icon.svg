@@ -1,0 +1,41 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Shiden Vault アイコン（正本）。docs/SHIDEN_ICON_GUIDE.md 準拠:
+       稲妻マスター＋パターンB（右下モチーフ）。モチーフは「南京錠」（金色の錠前＋紫の鍵穴）。
+       - 稲妻は Shiden Assets 等と同一（変更禁止）
+       - 錠前: ツル（白フチ→暗い金）→ 本体（白フチ→金グラデ）→ 鍵穴（紫）の順に描く
+       - 白フチ24 × S=0.52 ≒ 12.5px（稲妻基準に合わせる） -->
+  <defs>
+    <radialGradient id="bgr" cx="0.5" cy="0.3" r="1.0">
+      <stop offset="0" stop-color="#4d357e"/><stop offset="0.55" stop-color="#35245c"/><stop offset="1" stop-color="#1d1136"/>
+    </radialGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fde047"/><stop offset="0.5" stop-color="#f59e0b"/><stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a855f7"/><stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="lockbody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fce38b"/><stop offset="0.45" stop-color="#f4c04a"/><stop offset="1" stop-color="#d99a06"/>
+    </linearGradient>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#7c3aed" flood-opacity="0.6"/></filter>
+    <filter id="hsh" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.35"/></filter>
+  </defs>
+  <rect width="512" height="512" fill="url(#bgr)"/>
+  <!-- 稲妻（主役・共通。変更禁止） -->
+  <g transform="translate(48 56) scale(0.78)" filter="url(#sh)">
+    <path d="M296 36 L138 296 L238 296 L198 476 L396 208 L286 208 L352 36 Z" fill="none" stroke="#f5f2fa" stroke-width="72" stroke-linejoin="round"/>
+    <path d="M296 36 L138 296 L238 296 L198 476 L396 208 L286 208 L352 36 Z" fill="url(#bolt)" stroke="url(#edge)" stroke-width="40" stroke-linejoin="round"/>
+  </g>
+  <!-- モチーフ（右下・南京錠） -->
+  <g transform="translate(392 396) scale(0.52)" filter="url(#hsh)">
+    <!-- ツル -->
+    <path d="M-72 -30 V-100 A72 72 0 0 1 72 -100 V-30" fill="none" stroke="#fff" stroke-width="68" stroke-linecap="round"/>
+    <path d="M-72 -30 V-100 A72 72 0 0 1 72 -100 V-30" fill="none" stroke="#b97f05" stroke-width="44" stroke-linecap="round"/>
+    <!-- 本体 -->
+    <rect x="-122" y="-42" width="244" height="188" rx="38" fill="none" stroke="#fff" stroke-width="24"/>
+    <rect x="-122" y="-42" width="244" height="188" rx="38" fill="url(#lockbody)"/>
+    <!-- 鍵穴 -->
+    <circle cx="0" cy="26" r="28" fill="#4d357e"/>
+    <path d="M-14 40 L14 40 L22 104 L-22 104 Z" fill="#4d357e"/>
+  </g>
+</svg>
