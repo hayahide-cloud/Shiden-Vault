@@ -29,6 +29,33 @@ Shiden Vault（紫電パスワードマネージャー）の公開ホスティ�
 - 他端末との同期（操作キュー方式・409 は最新を取り直して再適用）
 - マスターパスワード変更（全体を再暗号化。他端末は次回解錠時に新パスワード）
 
+## 接続コード（合言葉で自動接続）
+
+各アプリの設定に **合言葉を1回入れるだけ** で Hayahide-Log に接続できる仕組み。トークンの貼り付けは不要で、iPhone のホーム画面アプリ（保存領域がアプリごとに分かれる）でも使える。
+
+1. Vault の「紫電アプリ接続 → 接続コード（合言葉）」で合言葉を決めて（「生成」推奨）発行する
+2. Vault が接続情報（owner / repo / branch / token）を合言葉から導出した鍵（PBKDF2-HMAC-SHA256 600,000回 → AES-256-GCM）で暗号化し、このリポジトリの `connect.json` に書き込む（Pages で公開されるが中身は暗号文のみ）
+3. 各アプリの設定欄「接続コード（合言葉）」に入力 → `https://hayahide-cloud.github.io/Shiden-Vault/connect.json` を取得・復号して設定に保存
+4. 合言葉は同一オリジン共有キー `shiden_connect_code` に保存されるので、同じブラウザの他の紫電アプリは入力なしで自動接続する
+5. **トークン更新**: Vault で配布トークンを切り替えて「配布設定を保存」すると同じ合言葉で自動再発行される。各アプリは同期が 401/403 で失敗した時点で合言葉から取り直し、新しいトークンに自動で切り替わる
+6. **無効化**: Vault の「無効化」で `connect.json` を失効状態にする（接続済みのアプリはそのまま使える。トークン自体を止めたい場合は GitHub でトークンを revoke する）
+
+注意:
+- 合言葉は大文字小文字・空白・ハイフンを区別しない（NFKC 正規化して大文字化）。英数12文字以上のランダムなもの（「生成」= 約60bit）を使う。規則的な語は総当たりされうる
+- 発行する端末の Vault のトークンは、対象リポジトリに Hayahide-Log と **Shiden-Vault** の両方（Contents 読み書き）を含めること
+- 配布するトークンは Hayahide-Log だけを対象にした別トークン（保管庫に「トークン」として登録して選択）にすると、万一合言葉が漏れても Shiden-Vault には書き込めない
+
+### アプリ側の対応状況
+
+| アプリ | 合言葉入力 | 共有キー自動接続 | 401 自動復旧 |
+| --- | --- | --- | --- |
+| Shiden Assets | ✅ | ✅ | ✅ |
+| Shiden Dashboard | ✅ | ✅ | ✅ |
+| Shiden Vault（2台目以降） | ✅ | ✅ | — |
+| Shiden Expense / LifeLogger / Tasks | 未対応（リポジトリをセッションに追加すれば組み込み可） | | |
+
+組み込みの参照実装は Shiden-Assets の `index.html` の「紫電 接続コード」ブロック（`fetchConnect` / `applyConnectCode` / `recoverByCode`、約45行）。設定パネルに入力欄を1つ足し、同期の 401/403 で `recoverByCode()` を呼んで true なら1回だけ再試行する。
+
 ## 紫電アプリ接続（トークンの一元管理）
 
 Shiden Assets / Dashboard / Expense / LifeLogger / Tasks は Hayahide-Log 用のトークンを各自の設定に持っている。このアプリの「紫電アプリ接続」カードから接続情報（owner / repo / branch / token）を配布し、アプリ側でトークンを打ち直さずに済ませる。
@@ -72,11 +99,12 @@ function adoptHubConnection() {
 
 ## 初期設定
 
-1. GitHub で Fine-grained token を発行（対象: Hayahide-Log のみ・Contents 読み書き）
+1. GitHub で Fine-grained token を発行（対象: Hayahide-Log と Shiden-Vault・Contents 読み書き）
 2. 右上「設定」に owner / repo / path（`vault.json`）/ token を入力して保存
 3. 「保管庫を作成」でマスターパスワードを決める（12文字以上推奨）
 4. 「紫電アプリ接続 → このアプリの接続トークンを保管庫に登録」で、そのトークン自体も保管庫に記録（期限は GitHub の設定画面で確認して記入）
-5. 「この端末の全アプリに書き込む」で Assets / Dashboard へ配布
+5. 「接続コード（合言葉）」を発行する（トークンの対象リポに Shiden-Vault も必要）
+6. 他の端末・アプリでは設定の「接続コード」に合言葉を入れるだけ。同じブラウザなら「この端末の全アプリに書き込む」でも可
 
 ## ファイル形式（vault.json）
 
