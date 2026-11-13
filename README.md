@@ -52,9 +52,11 @@ Shiden Vault（紫電パスワードマネージャー）の公開ホスティ�
 | Shiden Assets | ✅ | ✅ | ✅ |
 | Shiden Dashboard | ✅ | ✅ | ✅ |
 | Shiden Vault（2台目以降） | ✅ | ✅ | — |
-| Shiden Expense / LifeLogger / Tasks | 未対応（リポジトリをセッションに追加すれば組み込み可） | | |
+| Shiden LifeLogger | ✅ | ✅ | ✅ |
+| Shiden Tasks | ✅ | ✅ | ✅ |
+| Shiden Expense | ✅ | ✅ | ✅（GitHub API の全リクエストで自動再試行） |
 
-組み込みの参照実装は Shiden-Assets の `index.html` の「紫電 接続コード」ブロック（`fetchConnect` / `applyConnectCode` / `recoverByCode`、約45行）。設定パネルに入力欄を1つ足し、同期の 401/403 で `recoverByCode()` を呼んで true なら1回だけ再試行する。
+新しいアプリに組み込むときの参照実装は Shiden-Assets の `index.html` の「紫電 接続コード」ブロック（`fetchConnect` / `applyConnectCode` / `recoverByCode`、約45行）。設定パネルに入力欄を1つ足し、同期の 401/403 で `recoverByCode()` を呼んで true なら1回だけ再試行する。
 
 ## 紫電アプリ接続（トークンの一元管理）
 
