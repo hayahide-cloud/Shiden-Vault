@@ -177,7 +177,9 @@
       </span>
     </div>
     <div class="sync-cfg" id="gh-cfg-panel">
-      <label>GitHub Private リポジトリ（Hayahide-Log）の vault.json に暗号化した保管庫を保存します（各端末で1回設定）。Fine-grained トークンは対象リポジトリのみ・Contents 読み書きで発行してください。ファイルの中身はマスターパスワードで暗号化されるため、GitHub 上に平文は置かれません。</label>
+      <label>2台目以降の端末は、発行済みの接続コード（合言葉）を入れるだけで設定できます。</label>
+      <div class="fwith" style="margin-bottom:14px"><input id="cfg-code" placeholder="接続コード（合言葉）" autocapitalize="characters" autocorrect="off" autocomplete="off" spellcheck="false" style="flex:1;min-width:0"><button class="btn" id="cfg-code-go" type="button">接続</button></div>
+      <label>または手入力: GitHub Private リポジトリ（Hayahide-Log）の vault.json に暗号化した保管庫を保存します。Fine-grained トークンは Contents 読み書きで発行し、接続コードを発行する端末では対象リポジトリに Hayahide-Log と Shiden-Vault の両方を含めてください。ファイルの中身はマスターパスワードで暗号化されるため、GitHub 上に平文は置かれません。</label>
       <div class="cfg-grid">
         <input id="cfg-owner" placeholder="owner（例: hayahide-cloud）" value="hayahide-cloud" autocapitalize="off" autocorrect="off" autocomplete="off">
         <input id="cfg-repo" placeholder="repo（例: Hayahide-Log）" value="Hayahide-Log" autocapitalize="off" autocorrect="off" autocomplete="off">
@@ -208,7 +210,14 @@
      { v:1,
        entries:[ { id, type:"login"|"token"|"card"|"note", name, ..., ct, mt } ],
        apps:[ { id, name, url, storageKey, path } ],      // 紫電アプリ接続先
-       hub:{ tokenId, owner, repo, branch } }              // アプリに配布する接続情報
+       hub:{ tokenId, owner, repo, branch,                 // アプリに配布する接続情報
+             code, codeAt, codeToken } }                  // 接続コード（合言葉）と発行時のトークン
+
+   接続コード（connect.json・公開リポ Shiden-Vault に置く）
+     { format:"shiden-connect", v:1, kdf:{…PBKDF2…}, iv, ct, updated }
+     ct = AES-GCM( 合言葉から導出した鍵, { owner, repo, branch, token } )
+     合言葉は NFKC 正規化・空白/ハイフン除去・大文字化してから鍵を導出する（打ち間違いに強くする）
+     無効化時は { format:"shiden-connect", v:1, revoked:true }
 
    同期方式（Shiden Assets 流・操作キュー）
    編集は操作キューに積み、同期時に最新リモートを復号 → 適用 → 再暗号化して PUT。
@@ -225,6 +234,9 @@
 const CFG_KEY = "shiden_vault_gh_cfg", CACHE_KEY = "shiden_vault_vault_cache", OPS_KEY = "shiden_vault_ops_v1",
       PREF_KEY = "shiden_vault_prefs", HUB_KEY = "shiden_hub_connection";
 const KDF_ITER = 600000; // OWASP 推奨（PBKDF2-HMAC-SHA256）
+// 接続コード: 接続情報を合言葉で暗号化して公開リポ（Pages）に置き、各アプリは合言葉だけで取り込む
+const CODE_KEY = "shiden_connect_code", CONNECT_REPO = "Shiden-Vault", CONNECT_PATH = "connect.json",
+      CONNECT_URL = "https://hayahide-cloud.github.io/Shiden-Vault/connect.json";
 
 const TYPES = {
   login: { label: "ログイン", emoji: "🔑",
@@ -368,6 +380,22 @@ function strength(pw) { // 目安（文字種×長さ）。弱=赤・中=黄・�
   if (bits < 64) return { pct: 60, label: "ふつう", color: "var(--warn)" };
   return { pct: 100, label: "強い", color: "var(--good)" };
 }
+const normCode = s => String(s || "").normalize("NFKC").replace(/[\s\-ー－_]/g, "").toUpperCase();
+const fmtCode = s => normCode(s).replace(/(.{4})(?=.)/g, "$1-");
+function genCode() { // 紛らわしい 0/O/1/I を除いた32文字 × 12桁 ≒ 60bit
+  const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", buf = crypto.getRandomValues(new Uint32Array(12));
+  let out = ""; for (let i = 0; i < 12; i++) out += A[buf[i] % 32]; return out;
+}
+async function fetchConnect(code) {
+  const r = await fetch(CONNECT_URL + "?t=" + Date.now(), { cache: "no-store" });
+  if (r.status === 404) throw new Error("接続コードがまだ発行されていません");
+  if (!r.ok) throw new Error("接続コードの取得に失敗しました（" + r.status + "）");
+  const f = await r.json();
+  if (f.revoked) throw new Error("接続コードは無効化されています");
+  if (f.format !== "shiden-connect" || !f.kdf) throw new Error("接続ファイルの形式が不正です");
+  try { return await decryptJson(await keyFor(normCode(code), f.kdf), f); }
+  catch (e) { throw new Error("接続コード（合言葉）が違います"); }
+}
 function genPassword(len, opts) {
   let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   if (opts.digits) chars += "0123456789";
@@ -483,15 +511,17 @@ function renderLocked() {
 }
 
 function alertsHtml(v) {
+  const stale = v.hub.code && v.hub.codeToken && v.hub.codeToken !== hubConnection(v).token
+    ? `<div class="alert">🔑 配布するトークンが変わりました。「紫電アプリ接続」で接続コードを再発行すると、各アプリが新しいトークンに自動で切り替わります。</div>` : "";
   const left = e => e.type === "token" ? daysLeft(e.expires) : cardDaysLeft(e);
   const soon = v.entries.filter(e => (e.type === "token" && e.expires) || (e.type === "card" && e.expiry))
     .filter(e => left(e) != null && left(e) <= (e.type === "card" ? 30 : 14)).sort((a, b) => left(a) - left(b));
-  if (!soon.length) return "";
+  if (!soon.length) return stale;
   const expired = soon.filter(e => left(e) < 0), near = soon.filter(e => left(e) >= 0);
   let h = "";
   if (expired.length) h += `<div class="alert bad">⛔ 期限切れ: ${expired.map(e => esc(e.name)).join("、")}。トークンは再発行して各アプリへ配布し直し、カードは新しいカードの情報に更新してください。</div>`;
   if (near.length) h += `<div class="alert">⚠️ まもなく期限切れ: ${near.map(e => `${esc(e.name)}（あと${left(e)}日）`).join("、")}</div>`;
-  return h;
+  return stale + h;
 }
 
 function fieldHtml(f, val) {
@@ -595,6 +625,7 @@ function appsCard(v) {
   const tokens = v.entries.filter(e => e.type === "token");
   const c = getCfg();
   const selfRegistered = !!(c.token && tokens.some(t => t.secret === c.token));
+  const codeStale = !!(v.hub.code && v.hub.codeToken && v.hub.codeToken !== conn.token);
   const rows = v.apps.map(a => {
     const st = appState(a);
     const stText = a.storageKey ? (st ? `<span class="ok">● この端末で接続済み</span>` : `<span class="ng">○ この端末は未接続</span>`) : `<span class="ng">ハブ接続のみ（アプリ側の対応待ち）</span>`;
@@ -618,7 +649,7 @@ function appsCard(v) {
     </div>` : "";
   return `<div class="card">
     <div class="chead"><span class="cemoji">🔗</span><span class="cname">紫電アプリ接続</span><span class="csum">${ok ? `<span class="ok">配布可</span>` : `<span class="ng">トークン未設定</span>`}</span></div>
-    <div class="hint">各アプリに Hayahide-Log の接続情報（owner / repo / branch / トークン）を配り、アプリ側でトークンを打ち直さなくて済むようにします。同じ端末・同じブラウザ（hayahide-cloud.github.io）なら「この端末に書き込む」、iOS のホーム画面アプリなど保存領域が別の場合は「接続して開く」か、トークンをコピーしてアプリの設定に貼り付けてください。</div>
+    <div class="hint">各アプリに Hayahide-Log の接続情報（owner / repo / branch / トークン）を配り、アプリ側でトークンを打ち直さなくて済むようにします。同じ端末・同じブラウザ（hayahide-cloud.github.io）なら「この端末に書き込む」、iOS のホーム画面アプリなど保存領域が別の場合は下の「接続コード（合言葉）」をアプリの設定に入れてください。</div>
     <div class="frow"><span class="flabel">配布するトークン</span><select class="fin" id="hub-token">
       <option value="__self__"${(!v.hub.tokenId || v.hub.tokenId === "__self__") ? " selected" : ""}>このアプリの接続トークン（設定の Fine-grained token）</option>
       ${tokens.map(t => `<option value="${t.id}"${v.hub.tokenId === t.id ? " selected" : ""}>${esc(t.name)}${t.expires ? "（期限 " + esc(t.expires) + "）" : ""}</option>`).join("")}
@@ -630,6 +661,15 @@ function appsCard(v) {
       <button class="cbtn" id="hub-copy"${ok ? "" : " disabled"}>トークンをコピー</button>
       ${c.token && !selfRegistered ? `<button class="cbtn" id="hub-register">このアプリの接続トークンを保管庫に登録</button>` : ""}
     </div>
+    <div class="frow" style="margin-top:16px; border-top:1px solid var(--grid); padding-top:14px"><span class="flabel">接続コード（合言葉）</span>
+      <span class="fhint">合言葉を決めて発行すると、各アプリの設定に合言葉を入れるだけで接続できます（iPhone のホーム画面アプリでも可）。接続情報は合言葉で暗号化して公開リポ Shiden-Vault の connect.json に置かれます。英数12文字以上のランダムな合言葉を推奨（「生成」で作れます）。大文字小文字・ハイフン・空白は区別しません。発行には、このアプリのトークンに Shiden-Vault の Contents 読み書き権限が必要です。</span>
+      <span class="fhint">状態: ${v.hub.code ? `<span class="ok">発行済み</span>（${v.hub.codeAt ? mdhm(v.hub.codeAt) : "—"}）${codeStale ? ` <span class="badge warn">要再発行</span>` : ""}` : `<span class="ng">未発行</span>`}</span>
+      <div class="fwith"><input class="fin" id="cc-code" type="password" value="${esc(fmtCode(v.hub.code || ""))}" placeholder="例: K7QM-X2PA-9WRT" autocapitalize="characters" autocorrect="off" autocomplete="off" spellcheck="false"><button class="cbtn ibtn" type="button" data-cc="peek">表示</button><button class="cbtn ibtn" type="button" data-cc="gen">生成</button></div>
+    </div>
+    <div class="form-actions">
+      <button class="cbtn rec" id="cc-publish"${ok ? "" : " disabled"}>${v.hub.code ? "接続コードを再発行" : "接続コードを発行"}</button>
+      ${v.hub.code ? `<button class="cbtn" id="cc-copy">合言葉をコピー</button><button class="cbtn danger" id="cc-revoke">無効化</button>` : ""}
+    </div>
     <div class="items" style="margin-top:12px">${rows}</div>
     <div class="form-actions"><button class="cbtn" data-open="app">${ui.appForm ? "閉じる" : "＋ アプリを追加"}</button></div>
     ${appForm}
@@ -638,6 +678,8 @@ function appsCard(v) {
 function writeAppConnection(a, conn) {
   const payload = hubPayload(conn);
   localStorage.setItem(HUB_KEY, JSON.stringify(payload));
+  const code = (viewData() || {}).hub ? viewData().hub.code : "";
+  if (code) localStorage.setItem(CODE_KEY, code); // トークン更新時に各アプリが自動で取り直せるように
   if (!a.storageKey) return "ハブ接続キーに書き込みました（" + a.name + " 側の対応後に自動取り込み）";
   let cur = {}; try { cur = JSON.parse(localStorage.getItem(a.storageKey)) || {}; } catch (e) {}
   const next = Object.assign({}, cur, { owner: conn.owner, repo: conn.repo, branch: conn.branch, token: conn.token });
@@ -722,8 +764,20 @@ app.addEventListener("click", async e => {
   // 紫電アプリ接続
   if (btn.id === "hub-save") {
     await pushOp({ t: "hub", hub: { tokenId: document.getElementById("hub-token").value, owner: document.getElementById("hub-owner").value.trim(), repo: document.getElementById("hub-repo").value.trim(), branch: document.getElementById("hub-branch").value.trim() || "main" } });
-    toast("配布設定を保存しました"); return;
+    toast("配布設定を保存しました");
+    const nv = viewData(); // 接続コード発行済みで配布内容が変わったら、同じ合言葉で自動再発行（各アプリが自動で追従）
+    if (nv.hub.code && nv.hub.codeToken !== hubConnection(nv).token) await publishConnect(nv, nv.hub.code);
+    return;
   }
+  if (d.cc === "peek") { const inp = document.getElementById("cc-code"); inp.type = inp.type === "password" ? "text" : "password"; btn.textContent = inp.type === "password" ? "表示" : "隠す"; return; }
+  if (d.cc === "gen") { const inp = document.getElementById("cc-code"); inp.value = fmtCode(genCode()); inp.type = "text"; const pk = app.querySelector('[data-cc="peek"]'); if (pk) pk.textContent = "隠す"; return; }
+  if (btn.id === "cc-publish") {
+    const raw = document.getElementById("cc-code").value;
+    if (v.hub.code && normCode(raw) !== v.hub.code && !confirm("合言葉を変更します。各アプリでは新しい合言葉の入力が必要になります。続けますか？")) return;
+    await publishConnect(v, raw); return;
+  }
+  if (btn.id === "cc-copy") { copyText(fmtCode(v.hub.code), "合言葉"); return; }
+  if (btn.id === "cc-revoke") { if (!confirm("接続コードを無効化します。合言葉での新規接続ができなくなります（接続済みのアプリはそのまま使えます）。続けますか？")) return; await revokeConnect(v); return; }
   if (btn.id === "hub-copy") { const conn = hubConnection(v); if (conn.token) copyText(conn.token, "トークン"); return; }
   if (btn.id === "hub-register") {
     const c = getCfg();
@@ -734,6 +788,7 @@ app.addEventListener("click", async e => {
     const conn = hubConnection(v); if (!conn.token) return;
     const n = v.apps.filter(a => a.storageKey).map(a => writeAppConnection(a, conn)).length;
     localStorage.setItem(HUB_KEY, JSON.stringify(hubPayload(conn)));
+    if (v.hub.code) localStorage.setItem(CODE_KEY, v.hub.code);
     toast(`${n} 個のアプリとハブ接続キーに書き込みました`); render(); return;
   }
   if (d.appwrite) { const a = v.apps.find(x => x.id === d.appwrite), conn = hubConnection(v); if (a && conn.token) { toast(writeAppConnection(a, conn)); render(); } return; }
@@ -765,6 +820,43 @@ app.addEventListener("click", async e => {
     download("shiden-vault-" + today() + ".json", JSON.stringify(file, null, 2)); return;
   }
 });
+function connectTarget(v) { const c = getCfg(); return { owner: (v.hub && v.hub.owner) || c.owner || "hayahide-cloud", repo: CONNECT_REPO, path: CONNECT_PATH, branch: "main", token: c.token }; }
+async function putFile(c, obj, msg) { // 最新 sha を取って PUT（409 は1回だけ取り直し）
+  for (let i = 0; i < 2; i++) {
+    const cur = await ghGet(c);
+    try { return await ghPut(c, obj, cur.sha, msg); } catch (e) { if (!/\b409\b/.test(e.message) || i) throw e; }
+  }
+}
+function connectErr(e) {
+  return /\b(403|404)\b/.test(e.message)
+    ? "Shiden-Vault リポジトリへの書き込み権限がありません。右上「設定」のトークンを、対象リポジトリに Hayahide-Log と Shiden-Vault の両方（Contents 読み書き）を含めたものに差し替えてください。"
+    : e.message;
+}
+async function publishConnect(v, raw) {
+  const code = normCode(raw);
+  if (code.length < 10) { alert("合言葉は10文字以上にしてください（英数12文字以上を推奨。「生成」で作れます）。"); return false; }
+  const conn = hubConnection(v);
+  if (!conn.token) { alert("配布するトークンがありません。"); return false; }
+  if (!getCfg().token) { alert("右上「設定」でこのアプリの GitHub トークンを設定してください。"); return false; }
+  status("接続コードを発行中…");
+  try {
+    const kdf = newKdf(), enc = await encryptJson(await keyFor(code, kdf), hubPayload(conn));
+    await putFile(connectTarget(v), { format: "shiden-connect", v: 1, kdf, iv: enc.iv, ct: enc.ct, updated: new Date().toISOString() }, "connect ");
+    localStorage.setItem(CODE_KEY, code);
+    await pushOp({ t: "hub", hub: { code, codeAt: Date.now(), codeToken: conn.token } });
+    status("接続コードを発行しました " + hhmm()); toast("接続コードを発行しました（公開まで1〜2分）");
+    return true;
+  } catch (e) { status("接続コードの発行に失敗: " + e.message); alert("接続コードの発行に失敗しました。\n" + connectErr(e)); return false; }
+}
+async function revokeConnect(v) {
+  status("接続コードを無効化中…");
+  try {
+    await putFile(connectTarget(v), { format: "shiden-connect", v: 1, revoked: true, updated: new Date().toISOString() }, "connect revoke ");
+    localStorage.removeItem(CODE_KEY);
+    await pushOp({ t: "hub", hub: { code: "", codeAt: 0, codeToken: "" } });
+    status("接続コードを無効化しました " + hhmm()); toast("無効化しました");
+  } catch (e) { status("無効化に失敗: " + e.message); alert("無効化に失敗しました。\n" + connectErr(e)); }
+}
 function download(name, text) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "application/json" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
 
 /* ---------- 保管庫の作成・解錠・鍵の変更 ---------- */
@@ -841,9 +933,9 @@ async function ghGet(c) {
   const j = await r.json();
   return { data: JSON.parse(b64dec(j.content)), sha: j.sha };
 }
-async function ghPut(c, obj, sha) {
+async function ghPut(c, obj, sha, msg) {
   const url = `https://api.github.com/repos/${c.owner}/${c.repo}/contents/${c.path}`;
-  const body = { message: "vault " + new Date().toISOString(), content: b64enc(JSON.stringify(obj, null, 2)), branch: c.branch || "main" };
+  const body = { message: (msg || "vault ") + new Date().toISOString(), content: b64enc(JSON.stringify(obj, null, 2)), branch: c.branch || "main" };
   if (sha) body.sha = sha;
   const r = await fetch(url, { method: "PUT", headers: { Authorization: "Bearer " + c.token, Accept: "application/vnd.github+json", "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error("PUT " + r.status);
@@ -914,6 +1006,24 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
   REMOTE_FILE = undefined; REMOTE_ERR = ""; render();
   await sync(); render();
 });
+async function adoptCode(code) { // 合言葉 → 接続情報を取り込んでこの端末の GitHub 設定にする
+  const hub = await fetchConnect(code);
+  if (!hub.token || !hub.owner || !hub.repo) throw new Error("接続情報が不完全です");
+  const c = getCfg();
+  setCfg(Object.assign({}, c, { owner: hub.owner, repo: hub.repo, branch: hub.branch || "main", token: hub.token, path: c.path || "vault.json" }));
+  localStorage.setItem(CODE_KEY, normCode(code));
+}
+document.getElementById("cfg-code-go").addEventListener("click", async () => {
+  const code = document.getElementById("cfg-code").value;
+  if (!normCode(code)) return;
+  status("接続コードを確認中…");
+  try {
+    await adoptCode(code);
+    document.getElementById("cfg-code").value = ""; panel.classList.remove("open");
+    REMOTE_FILE = undefined; REMOTE_ERR = ""; render(); toast("接続しました");
+    await sync(); render();
+  } catch (e) { status(e.message); alert(e.message); }
+});
 document.getElementById("cfg-clear").addEventListener("click", () => {
   if (!confirm("この端末の GitHub 設定（トークン）と、端末内の暗号化コピー・未同期の変更を削除します。保管庫本体（GitHub 上）は残ります。続けますか？")) return;
   localStorage.removeItem(CFG_KEY); setCache(null); localStorage.removeItem(OPS_KEY); fillCfg(); lock(); REMOTE_FILE = undefined; status("設定を削除しました"); render();
@@ -934,6 +1044,8 @@ document.getElementById("gh-lock").addEventListener("click", () => lock("ロッ�
 })();
 
 async function boot() {
+  const saved = localStorage.getItem(CODE_KEY);
+  if (!cfgOk(getCfg()) && saved) { try { await adoptCode(saved); toast("接続コードで接続しました"); } catch (e) {} }
   render();
   if (cfgOk(getCfg())) { status("取得中…"); await sync(); render(); }
   else status(cachedFile() ? "GitHub 未設定（この端末内の暗号化コピー）" : "未設定（右上の「設定」からトークンを登録）");
