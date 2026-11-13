@@ -285,8 +285,8 @@ const DEFAULT_APPS = [
   { id: "dashboard",  name: "Shiden Dashboard",  url: "https://hayahide-cloud.github.io/Shiden-Dashboard/",  storageKey: "mtworks_gh_cfg",     path: "counters.json" },
   { id: "assets",     name: "Shiden Assets",     url: "https://hayahide-cloud.github.io/Shiden-Assets/",     storageKey: "shiden_asset_gh_cfg", path: "dashboard.json" },
   { id: "expense",    name: "Shiden Expense",    url: "https://hayahide-cloud.github.io/Shiden-Expense/",    storageKey: "", path: "" },
-  { id: "lifelogger", name: "Shiden LifeLogger", url: "https://hayahide-cloud.github.io/Shiden-LifeLogger/", storageKey: "", path: "" },
-  { id: "tasks",      name: "Shiden Tasks",      url: "https://hayahide-cloud.github.io/Shiden-Tasks/",      storageKey: "", path: "tasks.json" },
+  { id: "lifelogger", name: "Shiden LifeLogger", url: "https://hayahide-cloud.github.io/Shiden-LifeLogger/", storageKey: "hayahide_gh_cfg",  path: "counters.json" },
+  { id: "tasks",      name: "Shiden Tasks",      url: "https://hayahide-cloud.github.io/Shiden-Tasks/",      storageKey: "shiden_tasks_cfg", path: "tasks.json" },
 ];
 
 /* ---------- 基本ユーティリティ ---------- */
@@ -417,7 +417,9 @@ let lockTimer = null;
 const app = document.getElementById("app");
 
 function skeleton() { return { v: 1, entries: [], apps: clone(DEFAULT_APPS), hub: { tokenId: "__self__", owner: "hayahide-cloud", repo: "Hayahide-Log", branch: "main" } }; }
-function normalize(v) { v = v || {}; v.v = 1; v.entries = v.entries || []; v.apps = v.apps || clone(DEFAULT_APPS); v.hub = Object.assign({ tokenId: "__self__", owner: "hayahide-cloud", repo: "Hayahide-Log", branch: "main" }, v.hub || {}); return v; }
+function normalize(v) { v = v || {}; v.v = 1; v.entries = v.entries || []; v.apps = v.apps || clone(DEFAULT_APPS);
+  // 既存の保管庫: 後から対応した既知アプリの設定キーを補う（利用者が設定した値は上書きしない）
+  v.apps.forEach(a => { const d = DEFAULT_APPS.find(x => x.id === a.id); if (d && !a.storageKey && d.storageKey) { a.storageKey = d.storageKey; a.path = a.path || d.path; } }); v.hub = Object.assign({ tokenId: "__self__", owner: "hayahide-cloud", repo: "Hayahide-Log", branch: "main" }, v.hub || {}); return v; }
 function viewData() { return KEY ? applyOps(clone(BASE), PENDING) : null; }
 
 /* ---------- 操作の適用（リモート最新に対して再適用できる純関数） ---------- */
@@ -628,7 +630,7 @@ function appsCard(v) {
   const codeStale = !!(v.hub.code && v.hub.codeToken && v.hub.codeToken !== conn.token);
   const rows = v.apps.map(a => {
     const st = appState(a);
-    const stText = a.storageKey ? (st ? `<span class="ok">● この端末で接続済み</span>` : `<span class="ng">○ この端末は未接続</span>`) : `<span class="ng">ハブ接続のみ（アプリ側の対応待ち）</span>`;
+    const stText = a.storageKey ? (st ? `<span class="ok">● この端末で接続済み</span>` : `<span class="ng">○ この端末は未接続</span>`) : `<span class="ng">共有キー・接続コードで自動接続</span>`;
     return `<div class="approw">
       <div class="apphead"><span class="iico">⚡</span><span class="iname">${esc(a.name)}<span class="isub">${esc(hostOf(a.url))}${a.path ? " / " + esc(a.path) : ""} — ${stText}</span></span>
         <span class="iact"><button class="cbtn ibtn" data-appedit="${a.id}">編集</button></span></div>
