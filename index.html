@@ -110,6 +110,10 @@
   .irow { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--grid); cursor: pointer; }
   .irow:first-child { border-top: none; }
   .iico { width: 36px; height: 36px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: rgba(124,58,237,0.14); border: 1px solid var(--border); font-size: 17px; }
+  .iico.brand { background: transparent; border: none; }
+  .iico.brand svg { width: 38px; height: 26px; border-radius: 5px; box-shadow: 0 1px 4px rgba(0,0,0,0.45); }
+  .bmark { display: inline-flex; align-items: center; gap: 8px; }
+  .bmark svg { width: 34px; height: 23px; border-radius: 4px; flex: none; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
   .iname { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 700; }
   .iname .isub { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .iact { display: flex; gap: 6px; flex: none; }
@@ -246,7 +250,7 @@ const TYPES = {
   card: { label: "クレジットカード", emoji: "💳",
     fields: [
       { key: "name",   label: "カード名", req: true, placeholder: "楽天カード" },
-      { key: "brand",  label: "ブランド", sel: [["", "未選択"], ["Visa", "Visa"], ["Mastercard", "Mastercard"], ["JCB", "JCB"], ["Amex", "American Express"], ["Diners", "Diners Club"], ["その他", "その他"]] },
+      { key: "brand",  label: "ブランド", hint: "未選択ならカード番号の先頭から自動判定", sel: [["", "未選択"], ["Visa", "Visa"], ["Mastercard", "Mastercard"], ["JCB", "JCB"], ["Amex", "American Express"], ["Diners", "Diners Club"], ["その他", "その他"]] },
       { key: "holder", label: "名義（カード表記）", placeholder: "TARO YAMADA", copy: true },
       { key: "number", label: "カード番号", req: true, secret: true, copy: true, card: true, hint: "数字のみ（スペース・ハイフンは保存時に除去）。一覧には末尾4桁だけ表示" },
       { key: "expiry", label: "有効期限", kind: "month", hint: "期限の30日前から一覧で警告する" },
@@ -293,6 +297,35 @@ function cardDaysLeft(e) { return e.expiry ? daysLeft(monthEnd(e.expiry)) : null
 const cardDigits = v => String(v || "").replace(/\D/g, "");
 const cardFmt = v => cardDigits(v).replace(/(\d{4})(?=\d)/g, "$1 ");
 const cardLast4 = v => { const d = cardDigits(v); return d ? "•••• " + d.slice(-4) : ""; };
+// 番号の先頭桁（IIN）からブランドを推定（ブランド未選択時の表示用）
+function detectBrand(num) {
+  const d = cardDigits(num);
+  if (/^4/.test(d)) return "Visa";
+  if (/^(5[1-5]|222[1-9]|22[3-9]\d|2[3-6]\d\d|27[01]\d|2720)/.test(d)) return "Mastercard";
+  if (/^35(2[89]|[3-8]\d)/.test(d)) return "JCB";
+  if (/^3[47]/.test(d)) return "Amex";
+  if (/^3(0[0-5]|[68])/.test(d)) return "Diners";
+  return "";
+}
+function cardBrand(e) { return (e.brand && e.brand !== "その他") ? e.brand : (detectBrand(e.number) || e.brand || ""); }
+// ブランドの簡易マーク（カード形 48x32）。公式ロゴ画像ではなく識別用の図案
+function brandSvg(brand) {
+  const W = (bg, inner) => `<svg viewBox="0 0 48 32" xmlns="http://www.w3.org/2000/svg" aria-label="${esc(brand)}" role="img"><rect width="48" height="32" rx="5" fill="${bg}"/>${inner}</svg>`;
+  switch (brand) {
+    case "Visa":
+      return W("#ffffff", `<rect y="27" width="48" height="5" fill="#f7b600"/><text x="24" y="20.5" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="14" font-weight="900" font-style="italic" fill="#1a1f71" letter-spacing="-0.5">VISA</text>`);
+    case "Mastercard":
+      return W("#1d1d1f", `<circle cx="19" cy="16" r="9.5" fill="#eb001b"/><circle cx="29" cy="16" r="9.5" fill="#f79e1b"/><path d="M24 7.9a9.5 9.5 0 0 1 0 16.2a9.5 9.5 0 0 1 0-16.2z" fill="#ff5f00"/>`);
+    case "JCB":
+      return W("#ffffff", `<rect x="5" y="6" width="12" height="20" rx="3" fill="#0e4c96"/><rect x="18" y="6" width="12" height="20" rx="3" fill="#e60012"/><rect x="31" y="6" width="12" height="20" rx="3" fill="#009a44"/>
+        <g font-family="Arial, sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle"><text x="11" y="20.5">J</text><text x="24" y="20.5">C</text><text x="37" y="20.5">B</text></g>`);
+    case "Amex":
+      return W("#2e77bb", `<text x="24" y="20" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="10.5" font-weight="900" fill="#ffffff" letter-spacing="0.3">AMEX</text>`);
+    case "Diners":
+      return W("#ffffff", `<circle cx="24" cy="16" r="10" fill="none" stroke="#0079be" stroke-width="2.6"/><path d="M21 9.6a7 7 0 0 0 0 12.8z M27 9.6a7 7 0 0 1 0 12.8z" fill="#0079be"/>`);
+    default: return "";
+  }
+}
 const expiryMMYY = ym => /^\d{4}-\d{2}$/.test(ym || "") ? ym.slice(5, 7) + "/" + ym.slice(2, 4) : (ym || "");
 function prefs() { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch (e) { return {}; } }
 function setPref(k, v) { const p = prefs(); p[k] = v; localStorage.setItem(PREF_KEY, JSON.stringify(p)); }
@@ -498,18 +531,19 @@ function entryRow(e, v) {
   const badge = dl == null ? "" : (dl < 0 ? `<span class="badge bad">期限切れ</span>` : (dl <= warnDays ? `<span class="badge warn">あと${dl}日</span>` : ""));
   const sub = e.type === "login" ? [e.username, hostOf(e.url)].filter(Boolean).join(" / ")
             : e.type === "token" ? [e.service, e.scope, e.expires ? "期限 " + e.expires : ""].filter(Boolean).join(" / ")
-            : e.type === "card" ? [e.brand, cardLast4(e.number), e.expiry ? "期限 " + expiryMMYY(e.expiry) : ""].filter(Boolean).join(" / ")
+            : e.type === "card" ? [cardBrand(e), cardLast4(e.number), e.expiry ? "期限 " + expiryMMYY(e.expiry) : ""].filter(Boolean).join(" / ")
             : (e.tags || "");
   const quick = e.type === "login" && e.password ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="password">PWコピー</button>`
               : e.type === "token" && e.secret ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="secret">コピー</button>`
               : e.type === "card" && e.number ? `<button class="cbtn ibtn" data-copy="${e.id}" data-key="number">番号コピー</button>` : "";
   const isOpen = ui.open === e.id;
-  const detail = isOpen ? `<div class="detail">${T.fields.filter(f => f.key !== "name" && e[f.key]).map(f => {
+  const detail = isOpen ? `<div class="detail">${T.fields.filter(f => f.key !== "name" && (e[f.key] || (e.type === "card" && f.key === "brand" && cardBrand(e)))).map(f => {
       const shown = !f.secret || ui.show.has(e.id + ":" + f.key);
       let val = f.key === "tags" ? (e.tags || "").split(/\s+/).filter(Boolean).map(t => `<span class="badge tag">${esc(t)}</span>`).join("")
               : f.kind === "url" ? `<a href="${esc(e[f.key])}" target="_blank" rel="noopener noreferrer">${esc(e[f.key])}</a>`
               : f.kind === "month" ? esc(expiryMMYY(e[f.key])) + `<span class="fhint" style="margin-left:6px">（${esc(e[f.key])}）</span>`
               : f.card ? (shown ? esc(cardFmt(e[f.key])) : esc(cardLast4(e[f.key])))
+              : f.key === "brand" && brandSvg(cardBrand(e)) ? `<span class="bmark">${brandSvg(cardBrand(e))}${esc((f.sel.find(o => o[0] === cardBrand(e)) || [])[1] || cardBrand(e))}</span>`
               : f.sel ? esc((f.sel.find(o => o[0] === e[f.key]) || [])[1] || e[f.key])
               : shown ? esc(e[f.key]).replace(/\n/g, "<br>") : "••••••••••••";
       return `<div class="drow"><span class="dlab">${f.label.replace(/（.*?）/, "")}</span><span class="dval${f.secret && shown ? " mono" : ""}${f.secret && !shown ? " masked" : ""}">${val}</span>
@@ -520,7 +554,7 @@ function entryRow(e, v) {
       <button class="cbtn ibtn" data-edit="${e.id}">編集</button><button class="cbtn ibtn danger" data-del="${e.id}">削除</button></div>
     </div>` : "";
   return `<div class="irow" data-toggle="${e.id}">
-      <span class="iico">${T.emoji}</span>
+      ${e.type === "card" && brandSvg(cardBrand(e)) ? `<span class="iico brand">${brandSvg(cardBrand(e))}</span>` : `<span class="iico">${T.emoji}</span>`}
       <span class="iname">${esc(e.name)}${badge}<span class="isub">${esc(sub)}</span></span>
       <span class="iact">${quick}</span>
     </div>${detail}`;
@@ -637,6 +671,10 @@ function settingsCard(v) {
 /* ---------- 操作イベント ---------- */
 app.addEventListener("input", e => {
   if (e.target.id === "q") { ui.q = e.target.value; const v = viewData(); const items = app.querySelector(".items"); const html = entriesCard(v); const tmp = document.createElement("div"); tmp.innerHTML = html; items.innerHTML = tmp.querySelector(".items").innerHTML; }
+  if (e.target.dataset && e.target.dataset.fld === "number") {
+    const sel = app.querySelector(`.addform[data-form="entry"] [data-fld="brand"]`), b = detectBrand(e.target.value);
+    if (sel && b && (!sel.value || sel.dataset.auto === "1")) { sel.value = b; sel.dataset.auto = "1"; }
+  }
   if (e.target.id === "genlen") { ui.genLen = Number(e.target.value); document.getElementById("genlen-v").textContent = ui.genLen; }
 });
 app.addEventListener("change", e => {
